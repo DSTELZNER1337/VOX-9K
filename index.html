@@ -1,0 +1,1339 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>VOX-9K by DSTΞLZNER</title>
+
+    <style>
+        body {
+            background-color: #121212;
+
+            background:
+                linear-gradient(rgba(0, 0, 0, 0.65),
+                    rgba(0, 0, 0, 0.65)),
+                url("/background.png");
+
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+            background-attachment: fixed;
+
+            min-height: 100vh;
+
+            color: #e8e8e8;
+            font-family: Arial, sans-serif;
+            margin: 30px;
+        }
+
+        textarea {
+            width: 100%;
+            max-width: 900px;
+            min-height: 400px;
+
+            background-color: rgba(30, 30, 30, 0.92);
+            color: #e8e8e8;
+
+            border: 1px solid #444;
+            border-radius: 6px;
+
+            padding: 12px;
+
+            font-size: 16px;
+            line-height: 1.5;
+
+            resize: vertical;
+        }
+
+        button {
+            background-color: #2b2b2b;
+            color: #e8e8e8;
+
+            border: 1px solid #555;
+            border-radius: 5px;
+
+            padding: 8px 16px;
+
+            cursor: pointer;
+            margin-right: 5px;
+        }
+
+        button:hover {
+            background-color: #3a3a3a;
+        }
+
+        select {
+            background-color: #2b2b2b;
+            color: #e8e8e8;
+
+            border: 1px solid #555;
+            border-radius: 5px;
+
+            padding: 6px 10px;
+            min-width: 240px;
+        }
+
+        .controls {
+            margin-top: 20px;
+        }
+
+        .control-row {
+            margin-top: 15px;
+        }
+
+        .control-row label {
+            display: inline-block;
+            width: 70px;
+        }
+
+        input[type="range"] {
+            width: 250px;
+            vertical-align: middle;
+        }
+
+        .value-display {
+            display: inline-block;
+            width: 60px;
+            margin-left: 10px;
+        }
+
+        .compute-info {
+            margin-left: 10px;
+            color: #aaaaaa;
+            font-size: 13px;
+        }
+
+        select option:disabled {
+            color: #777777;
+        }
+
+        #status {
+            margin-top: 20px;
+            color: #aaaaaa;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>VOX-9K by DSTΞLZNER</h1>
+
+    <textarea id="promptText" placeholder="Paste your message you'd like read here..."></textarea>
+
+    <div class="controls">
+
+        <button id="readButton">Read</button>
+        <button id="pauseButton">Pause</button>
+        <button id="stopButton">Stop</button>
+
+        <div class="control-row">
+            <label for="voiceSelect">
+                Voice:
+            </label>
+
+            <select id="voiceSelect">
+                <optgroup label="American Female">
+                    <option value="af_sarah" selected>Sarah</option>
+                    <option value="af_heart">Heart</option>
+                    <option value="af_bella">Bella</option>
+                    <option value="af_nicole">Nicole</option>
+                    <option value="af_nova">Nova</option>
+                    <option value="af_sky">Sky</option>
+                </optgroup>
+
+                <optgroup label="American Male">
+                    <option value="am_michael">Michael</option>
+                    <option value="am_fenrir">Fenrir</option>
+                    <option value="am_puck">Puck</option>
+                    <option value="am_onyx">Onyx</option>
+                    <option value="am_liam">Liam</option>
+                </optgroup>
+
+                <optgroup label="British Female">
+                    <option value="bf_emma">Emma</option>
+                    <option value="bf_isabella">Isabella</option>
+                    <option value="bf_lily">Lily</option>
+                </optgroup>
+
+                <optgroup label="British Male">
+                    <option value="bm_george">George</option>
+                    <option value="bm_fable">Fable</option>
+                    <option value="bm_lewis">Lewis</option>
+                    <option value="bm_daniel">Daniel</option>
+                </optgroup>
+            </select>
+        </div>
+
+        <div class="control-row">
+            <label for="computeSelect">
+                Compute:
+            </label>
+
+            <select id="computeSelect">
+                <option value="auto" selected>
+                    Auto
+                </option>
+
+                <option value="cpu">
+                    CPU
+                </option>
+
+                <option id="cudaOption" value="cuda">
+                    NVIDIA GPU
+                </option>
+            </select>
+
+            <span id="computeInfo" class="compute-info">
+                Checking hardware...
+            </span>
+        </div>
+
+        <div class="control-row">
+            <label for="speedSlider">
+                Speed:
+            </label>
+
+            <input type="range" id="speedSlider" min="0.5" max="2" step="0.1" value="1">
+
+            <span id="speedValue" class="value-display">
+                1.0x
+            </span>
+        </div>
+
+        <div class="control-row">
+            <label for="volumeSlider">
+                Volume:
+            </label>
+
+            <input type="range" id="volumeSlider" min="0" max="1" step="0.1" value="1">
+
+            <span id="volumeValue" class="value-display">
+                100%
+            </span>
+        </div>
+
+    </div>
+
+    <div id="status">
+        Ready
+    </div>
+
+    <script>
+
+        // ==================================================
+        // HTML ELEMENTS
+        // ==================================================
+
+        const readButton =
+            document.getElementById("readButton");
+
+        const pauseButton =
+            document.getElementById("pauseButton");
+
+        const stopButton =
+            document.getElementById("stopButton");
+
+        const promptText =
+            document.getElementById("promptText");
+
+        const voiceSelect =
+            document.getElementById("voiceSelect");
+
+        const computeSelect =
+            document.getElementById("computeSelect");
+
+        const cudaOption =
+            document.getElementById("cudaOption");
+
+        const computeInfo =
+            document.getElementById("computeInfo");
+
+        const speedSlider =
+            document.getElementById("speedSlider");
+
+        const speedValue =
+            document.getElementById("speedValue");
+
+        const volumeSlider =
+            document.getElementById("volumeSlider");
+
+        const volumeValue =
+            document.getElementById("volumeValue");
+
+        const statusDisplay =
+            document.getElementById("status");
+
+
+        // ==================================================
+        // PLAYBACK STATE
+        // ==================================================
+
+        let speechChunks = [];
+
+        let currentChunk = 0;
+
+        let currentAudio = null;
+
+        let currentAudioUrl = null;
+
+        let isPaused = false;
+
+        let isActive = false;
+
+        let playbackSession = 0;
+
+        // The voice selected when Read is pressed.
+        // Locking it for the session keeps prefetched chunks
+        // from accidentally using a different voice.
+        let activeVoice = "af_sarah";
+
+        let activeVoiceLabel = "Sarah";
+
+        let activeCompute = "auto";
+
+        let autoComputePreference = "unknown";
+
+        const chunkAudioCache = new Map();
+
+        const fetchControllers = new Map();
+
+
+        // ==================================================
+        // CLEAN TEXT
+        // ==================================================
+
+        function cleanText(text) {
+
+            return text
+
+                .replace(/^={3,}\s*$/gm, "")
+
+                .replace(/^-{3,}\s*$/gm, "")
+
+                .replace(/^_{3,}\s*$/gm, "")
+
+                .replace(/^\*{3,}\s*$/gm, "")
+
+                .replace(/^~{3,}\s*$/gm, "")
+
+                .replace(/^#{1,6}\s+/gm, "")
+
+                .replace(/\*\*/g, "")
+
+                .replace(/__/g, "")
+
+                .replace(/`/g, "")
+
+                .replace(/^>\s?/gm, "")
+
+                .replace(/^\s*[-*+]\s+/gm, "")
+
+                .replace(/\n{3,}/g, "\n\n")
+
+                .trim();
+        }
+
+
+        // ==================================================
+        // SPLIT TEXT INTO CHUNKS
+        // ==================================================
+
+        function splitIntoChunks(text) {
+
+            const segmenter =
+                new Intl.Segmenter(
+                    "en",
+                    {
+                        granularity: "sentence"
+                    }
+                );
+
+
+            const sentences =
+                Array.from(
+                    segmenter.segment(text),
+
+                    part =>
+                        part.segment.trim()
+                )
+                    .filter(Boolean);
+
+
+            const chunks = [];
+
+            let currentChunkText = "";
+
+            const firstChunkLength = 150;
+            const secondChunkLength = 300;
+            const normalChunkLength = 700;
+
+
+            for (const sentence of sentences) {
+
+                let targetLength;
+
+                if (chunks.length === 0) {
+
+                    targetLength =
+                        firstChunkLength;
+
+                } else if (chunks.length === 1) {
+
+                    targetLength =
+                        secondChunkLength;
+
+                } else {
+
+                    targetLength =
+                        normalChunkLength;
+                }
+
+
+                const candidate =
+                    currentChunkText
+                        ? currentChunkText + " " + sentence
+                        : sentence;
+
+
+                if (
+                    candidate.length <=
+                    targetLength
+                ) {
+
+                    currentChunkText =
+                        candidate;
+
+                } else {
+
+                    if (currentChunkText) {
+
+                        chunks.push(
+                            currentChunkText
+                        );
+                    }
+
+
+                    currentChunkText =
+                        sentence;
+                }
+            }
+
+
+            if (currentChunkText) {
+
+                chunks.push(
+                    currentChunkText
+                );
+            }
+
+
+            return chunks;
+        }
+
+
+        // ==================================================
+        // AUDIO CLEANUP
+        // ==================================================
+
+        function cleanUpAudio() {
+
+            if (currentAudio) {
+
+                currentAudio.pause();
+
+                currentAudio.onended = null;
+
+                currentAudio.onerror = null;
+
+                currentAudio = null;
+            }
+
+
+            if (currentAudioUrl) {
+
+                URL.revokeObjectURL(
+                    currentAudioUrl
+                );
+
+                currentAudioUrl = null;
+            }
+        }
+
+
+        // ==================================================
+        // CANCEL ALL TTS REQUESTS
+        // ==================================================
+
+        function cancelAllRequests() {
+
+            for (
+                const controller
+                of fetchControllers.values()
+            ) {
+
+                controller.abort();
+            }
+
+
+            fetchControllers.clear();
+
+            chunkAudioCache.clear();
+        }
+
+
+        // ==================================================
+        // APPLY VOLUME + SPEED
+        // ==================================================
+
+        function applyAudioSettings() {
+
+            if (!currentAudio) {
+                return;
+            }
+
+
+            currentAudio.volume =
+                Number(
+                    volumeSlider.value
+                );
+
+
+            currentAudio.playbackRate =
+                Number(
+                    speedSlider.value
+                );
+
+
+            if (
+                "preservesPitch"
+                in currentAudio
+            ) {
+
+                currentAudio.preservesPitch =
+                    true;
+            }
+        }
+
+
+        // ==================================================
+        // REQUEST KOKORO AUDIO
+        // ==================================================
+
+        async function fetchChunkAudio(
+            chunkIndex,
+            session
+        ) {
+
+            if (
+                chunkIndex >=
+                speechChunks.length
+            ) {
+
+                return null;
+            }
+
+
+            if (
+                chunkAudioCache.has(
+                    chunkIndex
+                )
+            ) {
+
+                return chunkAudioCache.get(
+                    chunkIndex
+                );
+            }
+
+
+            const requestPromise =
+                (async function () {
+
+                    const controller =
+                        new AbortController();
+
+
+                    fetchControllers.set(
+                        chunkIndex,
+                        controller
+                    );
+
+
+                    try {
+
+                        const response =
+                            await fetch(
+                                "/tts",
+                                {
+                                    method: "POST",
+
+                                    headers: {
+                                        "Content-Type":
+                                            "application/json"
+                                    },
+
+                                    body:
+                                        JSON.stringify({
+                                            text:
+                                                speechChunks[
+                                                chunkIndex
+                                                ],
+
+                                            voice:
+                                                activeVoice,
+
+                                            compute:
+                                                activeCompute
+                                        }),
+
+                                    signal:
+                                        controller.signal
+                                }
+                            );
+
+
+                        if (!response.ok) {
+
+                            let message =
+                                "TTS generation failed.";
+
+
+                            try {
+
+                                const errorData =
+                                    await response.json();
+
+
+                                if (
+                                    errorData.error
+                                ) {
+
+                                    message =
+                                        errorData.error;
+                                }
+
+                            } catch {
+                            }
+
+
+                            throw new Error(
+                                message
+                            );
+                        }
+
+
+                        if (
+                            session !==
+                            playbackSession
+                        ) {
+
+                            return null;
+                        }
+
+
+                        return await response.blob();
+
+
+                    } finally {
+
+                        fetchControllers.delete(
+                            chunkIndex
+                        );
+                    }
+
+                })();
+
+
+            chunkAudioCache.set(
+                chunkIndex,
+                requestPromise
+            );
+
+
+            try {
+
+                return await requestPromise;
+
+
+            } catch (error) {
+
+                chunkAudioCache.delete(
+                    chunkIndex
+                );
+
+
+                throw error;
+            }
+        }
+
+
+        // ==================================================
+        // PRE-GENERATE NEXT CHUNK
+        // ==================================================
+
+        function prefetchNextChunk(
+            session
+        ) {
+
+            const nextChunk =
+                currentChunk + 1;
+
+
+            if (
+                nextChunk >=
+                speechChunks.length
+            ) {
+
+                return;
+            }
+
+
+            if (
+                session !==
+                playbackSession
+            ) {
+
+                return;
+            }
+
+
+            fetchChunkAudio(
+                nextChunk,
+                session
+            )
+                .catch(function (error) {
+
+                    if (
+                        error.name !==
+                        "AbortError"
+                    ) {
+
+                        console.error(
+                            "Prefetch error:",
+                            error
+                        );
+                    }
+                });
+        }
+
+
+        // ==================================================
+        // PLAY CURRENT CHUNK
+        // ==================================================
+
+        async function playCurrentChunk(
+            session
+        ) {
+
+            if (
+                session !==
+                playbackSession
+            ) {
+
+                return;
+            }
+
+
+            if (
+                currentChunk >=
+                speechChunks.length
+            ) {
+
+                cleanUpAudio();
+
+
+                isActive = false;
+
+                isPaused = false;
+
+
+                pauseButton.textContent =
+                    "Pause";
+
+
+                statusDisplay.textContent =
+                    "Finished";
+
+
+                return;
+            }
+
+
+            statusDisplay.textContent =
+                "Preparing " +
+                (currentChunk + 1) +
+                " / " +
+                speechChunks.length;
+
+
+            try {
+
+                const audioBlob =
+                    await fetchChunkAudio(
+                        currentChunk,
+                        session
+                    );
+
+
+                if (
+                    !audioBlob ||
+                    session !==
+                    playbackSession
+                ) {
+
+                    return;
+                }
+
+
+                chunkAudioCache.delete(
+                    currentChunk
+                );
+
+
+                cleanUpAudio();
+
+
+                currentAudioUrl =
+                    URL.createObjectURL(
+                        audioBlob
+                    );
+
+
+                currentAudio =
+                    new Audio(
+                        currentAudioUrl
+                    );
+
+
+                applyAudioSettings();
+
+
+                currentAudio.onended =
+                    function () {
+
+                        if (
+                            session !==
+                            playbackSession
+                        ) {
+
+                            return;
+                        }
+
+
+                        cleanUpAudio();
+
+
+                        currentChunk++;
+
+
+                        playCurrentChunk(
+                            session
+                        );
+                    };
+
+
+                currentAudio.onerror =
+                    function () {
+
+                        statusDisplay.textContent =
+                            "Audio playback error.";
+
+
+                        isActive = false;
+                    };
+
+
+                if (isPaused) {
+
+                    statusDisplay.textContent =
+                        "Paused at " +
+                        (currentChunk + 1) +
+                        " / " +
+                        speechChunks.length;
+
+
+                    return;
+                }
+
+
+                statusDisplay.textContent =
+                    "Reading " +
+                    (currentChunk + 1) +
+                    " / " +
+                    speechChunks.length +
+                    " - " +
+                    activeVoiceLabel +
+                    " - " +
+                    resolvedComputeLabel(
+                        activeCompute
+                    );
+
+
+                await currentAudio.play();
+
+
+                prefetchNextChunk(
+                    session
+                );
+
+
+            } catch (error) {
+
+                if (
+                    error.name ===
+                    "AbortError"
+                ) {
+
+                    return;
+                }
+
+
+                console.error(
+                    "VOX-9K error:",
+                    error
+                );
+
+
+                statusDisplay.textContent =
+                    "Error: " +
+                    error.message;
+
+
+                isActive = false;
+            }
+        }
+
+
+        // ==================================================
+        // READ
+        // ==================================================
+
+        readButton.addEventListener(
+            "click",
+            function () {
+
+                playbackSession++;
+
+
+                cancelAllRequests();
+
+
+                cleanUpAudio();
+
+
+                const rawText =
+                    promptText.value;
+
+
+                const cleanedText =
+                    cleanText(
+                        rawText
+                    );
+
+
+                speechChunks =
+                    splitIntoChunks(
+                        cleanedText
+                    );
+
+
+                if (
+                    speechChunks.length === 0
+                ) {
+
+                    statusDisplay.textContent =
+                        "Nothing to read";
+
+
+                    return;
+                }
+
+
+                // Lock in the selected voice for this
+                // entire Read session.
+                activeVoice =
+                    voiceSelect.value;
+
+                activeVoiceLabel =
+                    voiceSelect.options[
+                        voiceSelect.selectedIndex
+                    ].text;
+
+                activeCompute =
+                    computeSelect.value;
+
+
+                currentChunk = 0;
+
+                isPaused = false;
+
+                isActive = true;
+
+
+                pauseButton.textContent =
+                    "Pause";
+
+
+                const session =
+                    playbackSession;
+
+
+                playCurrentChunk(
+                    session
+                );
+            }
+        );
+
+
+        // ==================================================
+        // PAUSE / RESUME
+        // ==================================================
+
+        pauseButton.addEventListener(
+            "click",
+            async function () {
+
+                if (!isActive) {
+                    return;
+                }
+
+
+                if (isPaused) {
+
+                    isPaused = false;
+
+
+                    pauseButton.textContent =
+                        "Pause";
+
+
+                    if (currentAudio) {
+
+                        applyAudioSettings();
+
+
+                        statusDisplay.textContent =
+                            "Reading " +
+                            (currentChunk + 1) +
+                            " / " +
+                            speechChunks.length;
+
+
+                        try {
+
+                            await currentAudio.play();
+
+                        } catch (error) {
+
+                            console.error(
+                                error
+                            );
+                        }
+
+
+                        prefetchNextChunk(
+                            playbackSession
+                        );
+
+
+                    } else {
+
+                        playCurrentChunk(
+                            playbackSession
+                        );
+                    }
+
+
+                    return;
+                }
+
+
+                isPaused = true;
+
+
+                if (currentAudio) {
+
+                    currentAudio.pause();
+                }
+
+
+                pauseButton.textContent =
+                    "Resume";
+
+
+                statusDisplay.textContent =
+                    "Paused at " +
+                    (currentChunk + 1) +
+                    " / " +
+                    speechChunks.length;
+            }
+        );
+
+
+        // ==================================================
+        // STOP
+        // ==================================================
+
+        stopButton.addEventListener(
+            "click",
+            function () {
+
+                playbackSession++;
+
+
+                cancelAllRequests();
+
+
+                cleanUpAudio();
+
+
+                speechChunks = [];
+
+                currentChunk = 0;
+
+                isPaused = false;
+
+                isActive = false;
+
+
+                pauseButton.textContent =
+                    "Pause";
+
+
+                statusDisplay.textContent =
+                    "Stopped";
+            }
+        );
+
+
+        // ==================================================
+        // COMPUTE AVAILABILITY
+        // ==================================================
+
+        function resolvedComputeLabel(
+            mode
+        ) {
+
+            if (mode === "auto") {
+
+                if (
+                    autoComputePreference ===
+                    "cuda"
+                ) {
+
+                    return "NVIDIA GPU";
+                }
+
+
+                if (
+                    autoComputePreference ===
+                    "cpu"
+                ) {
+
+                    return "CPU";
+                }
+
+
+                return "Unknown";
+            }
+
+
+            if (mode === "cuda") {
+
+                return "NVIDIA GPU";
+            }
+
+
+            if (mode === "cpu") {
+
+                return "CPU";
+            }
+
+
+            return "Unknown";
+        }
+
+
+        function updateComputeDisplay() {
+
+            const selected =
+                computeSelect.value;
+
+
+            if (selected === "auto") {
+
+                computeInfo.textContent =
+                    "Auto → " +
+                    resolvedComputeLabel(
+                        "auto"
+                    );
+
+                return;
+            }
+
+
+            computeInfo.textContent =
+                resolvedComputeLabel(
+                    selected
+                );
+        }
+
+
+        async function loadSystemInfo() {
+
+            try {
+
+                const response =
+                    await fetch(
+                        "/system-info"
+                    );
+
+
+                if (!response.ok) {
+
+                    throw new Error(
+                        "Could not read system info."
+                    );
+                }
+
+
+                const info =
+                    await response.json();
+
+
+                autoComputePreference =
+                    info.auto_preference
+                    || "unknown";
+
+
+                const cudaAvailable =
+                    Boolean(
+                        info.modes &&
+                        info.modes.cuda
+                    );
+
+
+                const cpuAvailable =
+                    Boolean(
+                        info.modes &&
+                        info.modes.cpu
+                    );
+
+
+                cudaOption.disabled =
+                    !cudaAvailable;
+
+
+                if (cudaAvailable) {
+
+                    cudaOption.textContent =
+                        "NVIDIA GPU";
+
+                } else {
+
+                    cudaOption.textContent =
+                        "NVIDIA GPU (Unavailable)";
+                }
+
+
+                const cpuOption =
+                    computeSelect.querySelector(
+                        'option[value="cpu"]'
+                    );
+
+
+                if (cpuOption) {
+
+                    cpuOption.disabled =
+                        !cpuAvailable;
+                }
+
+
+                updateComputeDisplay();
+
+
+            } catch (error) {
+
+                console.error(
+                    "System info error:",
+                    error
+                );
+
+
+                computeInfo.textContent =
+                    "Hardware check failed";
+
+
+                cudaOption.disabled =
+                    true;
+            }
+        }
+
+
+        loadSystemInfo();
+
+
+        computeSelect.addEventListener(
+            "change",
+            updateComputeDisplay
+        );
+
+
+        // ==================================================
+        // SPEED
+        // ==================================================
+
+        speedSlider.addEventListener(
+            "input",
+            function () {
+
+                speedValue.textContent =
+                    Number(
+                        speedSlider.value
+                    ).toFixed(1)
+                    + "x";
+
+
+                if (currentAudio) {
+
+                    currentAudio.playbackRate =
+                        Number(
+                            speedSlider.value
+                        );
+                }
+            }
+        );
+
+
+        // ==================================================
+        // VOLUME
+        // ==================================================
+
+        volumeSlider.addEventListener(
+            "input",
+            function () {
+
+                volumeValue.textContent =
+                    Math.round(
+                        volumeSlider.value *
+                        100
+                    )
+                    + "%";
+
+
+                if (currentAudio) {
+
+                    currentAudio.volume =
+                        Number(
+                            volumeSlider.value
+                        );
+                }
+            }
+        );
+
+    </script>
+
+</body>
+
+</html>
