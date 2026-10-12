@@ -49,9 +49,11 @@ While the current chunk is playing, VOX-9K begins generating the next chunk in t
 
 The current startup strategy uses approximately:
 
+```text
 Chunk 1: 150 characters
 Chunk 2: 300 characters
 Chunk 3+: 700 characters
+```
 
 This helps audio begin quickly while allowing the generation pipeline to build enough buffer for continuous playback.
 
@@ -86,25 +88,35 @@ Open a terminal inside the VOX-9K folder.
 
 Create a virtual environment:
 
+```cmd
 py -3.12 -m venv .venv
+```
 
 Install CPU dependencies:
 
+```cmd
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
 
 ### macOS / Linux
 
 Create a virtual environment:
 
+```bash
 python3 -m venv .venv
+```
 
 Activate it:
 
+```bash
 source .venv/bin/activate
+```
 
 Install CPU dependencies:
 
+```bash
 python -m pip install -r requirements.txt
+```
 
 ---
 
@@ -116,20 +128,28 @@ PyKokoro's CPU and GPU ONNX Runtime packages are alternatives. Use one provider 
 
 If you initially installed the CPU version on Windows, remove the CPU ONNX Runtime package:
 
+```cmd
 .\.venv\Scripts\python.exe -m pip uninstall -y onnxruntime
+```
 
 Then install the GPU requirements:
 
+```cmd
 .\.venv\Scripts\python.exe -m pip install -r requirements-gpu.txt
+```
 
 You can check which ONNX providers are available with:
 
+```cmd
 .\.venv\Scripts\python.exe -c "import onnxruntime as ort; print(ort.get_available_providers())"
+```
 
 A working NVIDIA setup should include:
 
+```text
 CUDAExecutionProvider
 CPUExecutionProvider
+```
 
 ---
 
@@ -139,15 +159,21 @@ CPUExecutionProvider
 
 Start the local server:
 
+```cmd
 .\.venv\Scripts\python.exe server.py
+```
 
 ### macOS / Linux
 
+```bash
 python server.py
+```
 
 Then open:
 
+```text
 http://127.0.0.1:5000
+```
 
 in your browser.
 
@@ -161,21 +187,29 @@ VOX-9K provides three compute options.
 
 ### Auto
 
+```text
 Auto
+```
 
 Automatically selects the best available inference provider.
 
 If CUDA is available, the interface will display:
 
+```text
 Auto → NVIDIA GPU
+```
 
 Otherwise it will fall back to CPU:
 
+```text
 Auto → CPU
+```
 
 ### CPU
 
+```text
 CPU
+```
 
 Forces CPU inference.
 
@@ -183,7 +217,9 @@ This is the most broadly compatible option.
 
 ### NVIDIA GPU
 
+```text
 NVIDIA GPU
+```
 
 Forces CUDA inference when a compatible NVIDIA GPU and runtime are available.
 
@@ -252,7 +288,9 @@ The selected voice is locked when playback begins so prefetched audio chunks rem
 
 VOX-9K loads its background from:
 
+```text
 background.png
+```
 
 To use your own background:
 
@@ -263,7 +301,9 @@ To use your own background:
 
 Recommended resolution:
 
+```text
 1920 x 1080 or higher
+```
 
 Dark images generally work best with the current interface overlay.
 
@@ -288,9 +328,11 @@ Sentence segmentation uses the browser's `Intl.Segmenter` API rather than simple
 
 This prevents values such as:
 
+```text
 8.2
 3.18
 1.24
+```
 
 from being incorrectly interpreted as sentence boundaries.
 
@@ -306,7 +348,9 @@ VOX-9K does not require a cloud text-to-speech API.
 
 The Flask server is configured to listen on:
 
+```text
 127.0.0.1
+```
 
 which limits access to the local machine by default.
 
@@ -314,6 +358,7 @@ which limits access to the local machine by default.
 
 ## Project Structure
 
+```text
 VOX-9K/
 │
 ├── index.html
@@ -331,9 +376,11 @@ VOX-9K/
 
 The application will also create local runtime directories such as:
 
+```text
 .venv/
 cache/
 temp/
+```
 
 These are intentionally excluded from Git through `.gitignore`.
 
@@ -415,4 +462,6 @@ VOX-9K is currently under active development.
 
 Current release target:
 
+```text
 v0.1.0
+```
