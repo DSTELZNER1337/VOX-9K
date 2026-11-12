@@ -80,8 +80,8 @@ class Event:
 
 class DesktopWindowTests(unittest.TestCase):
     def setUp(self):
-        self.window=Mock();self.window.events=types.SimpleNamespace(closed=Event())
-        self.webview=Mock();self.webview.create_window.return_value=self.window
+        self.window=Mock();self.window.events=types.SimpleNamespace(closed=Event(),loaded=Event())
+        self.webview=Mock();self.webview.settings={};self.webview.create_window.return_value=self.window
         self.services=Mock();self.services.closed=threading.Event();self.services.connect.return_value=desktop.APP_URL
         self.services.close.side_effect=self.services.closed.set
         self.webview.start.side_effect=lambda callback,**kwargs:(callback(),self.window.events.closed.fire())
@@ -92,6 +92,9 @@ class DesktopWindowTests(unittest.TestCase):
         self.assertTrue(self.webview.create_window.call_args.kwargs["resizable"])
         self.assertEqual(self.webview.start.call_args.kwargs["gui"],"edgechromium")
         self.assertGreaterEqual(self.services.close.call_count,1)
+        self.assertTrue(self.webview.settings["ALLOW_DOWNLOADS"])
+        self.assertFalse(self.webview.start.call_args.kwargs["debug"])
+        self.assertEqual(len(self.window.events.loaded.handlers),1)
     def test_failed_startup_shows_safe_error_and_cleans_up(self):
         self.services.connect.side_effect=RuntimeError("<unsafe>")
         self.assertEqual(desktop.main(self.webview,self.services),1)

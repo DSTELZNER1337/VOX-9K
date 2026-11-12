@@ -50,13 +50,17 @@ Microsoft Edge WebView2 Runtime is separately licensed; a future installer must 
 Recorded 2026-11-12 for the source-code publication:
 
 - **background.png:** the owner states that this abstract artwork was custom-generated with OpenAI's ChatGPT image generation tool, under the owner's creative direction specifically for VOX-9K. The owner states it was not downloaded from a stock library or copied from an existing software product.
-- **screenshot.png:** the owner identifies this as a screenshot of their application containing that same generated background. It is a historical screenshot and may differ from the current UI polish.
-- **Permission:** the owner expressly authorizes use, modification and redistribution of this artwork as part of the free, open-source VOX-9K project, including GitHub, desktop application distribution, StelzTools and portfolio materials. The files are retained unchanged in this source publication.
+- **screenshot.png:** the owner identifies this as a screenshot of their application containing that same generated background. The owner supplied the current application screenshot for the follow-up source publication on 2026-11-12; it shows WAV export, background controls and the updated Stelz Tools footer.
+- **Permission:** the owner expressly authorizes use, modification and redistribution of this artwork as part of the free, open-source VOX-9K project, including GitHub, desktop application distribution, StelzTools and portfolio materials. The background remains unchanged. The repository screenshot was refreshed with the owner's approved image, copied without editing, for the follow-up source publication.
 - **Rights scope:** this records the owner's provenance statement and permission to use/distribute the generated output. It does not establish that the AI-generated artwork is copyright-protected, grant exclusive rights, or guarantee that similar output cannot exist. The existing MIT license covers original application code; third-party dependencies/models retain their own terms.
 
 OpenAI's [Terms of Use](https://openai.com/policies/terms-of-use/) (Content: ownership and similarity; checked 2026-11-12) assign output rights between OpenAI and the user to the extent permitted by applicable law, and explain that output may not be unique. Contractual output rights and permission to distribute are separate from copyright protection or exclusivity. The owner remains responsible for supplied content and applicable third-party rights. No OpenAI endorsement is implied.
 
-Asset integrity at this review:
+Asset integrity after the 2026-11-12 screenshot refresh:
 
 - `background.png`: SHA-256 `103b6e2d447463d3f001277850017ad005eae8bb31cd25f0ed17d7659976ecc6`.
-- `screenshot.png`: SHA-256 `89c2f1a38c1b333aa507979b53ec9770afcfae608ffa8db4bab852c21621b755`.
+- `screenshot.png`: SHA-256 `8c4e56b6afe50fbaaf04cefa22149db146626597fad96d567033e71bf8e67961`.
+
+## Local feature decoders
+
+Pillow 12.3.0 declares MIT-CMU (installed License-Expression and LICENSE). SoundFile 0.14.0 declares BSD-3-Clause (installed metadata/LICENSE). These existing packages are now explicit CPU/GPU/test requirements for validated raster images and float WAV decoding; neither was installed or upgraded during this pass. SoundFile's underlying libsndfile and any bundled image/audio codec binaries have separate redistribution terms, which a future installer must review. This source-only change does not bundle those binaries.

@@ -1,2 +1,5 @@
 Flask
 pykokoro[cpu]
+# Raster decoding and native WAV decoding; already installed in acceptance environment.
+Pillow==12.3.0
+soundfile==0.14.0

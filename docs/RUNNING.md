@@ -88,3 +88,7 @@ VOX_DISABLE_QWEN=1 .venv/bin/python server.py
 ```
 
 Start with Python 3.12 and ONNX Runtime CPU, then check native phonemizer requirements and real playback on the Mac. CoreML and Mac desktop mode were not tested. There is no MPS/Metal Qwen backend in this project.
+
+## Local export and appearance features
+
+See [WAV export and backgrounds](EXPORT_AND_BACKGROUNDS.md) for native-speed output, approximate versus measured metrics, limits, per-user image paths and restore-default. Launch commands above are unchanged. Windows native saving uses pywebview's enabled Save dialog; browser preferences determine browser saving. No standalone installer is provided.
