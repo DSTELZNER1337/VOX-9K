@@ -2,7 +2,15 @@
 
 **Local neural text-to-speech for long AI, coding, research, and general text prompts.**
 
-VOX-9K is a lightweight local text-to-speech application built around Kokoro neural TTS.
+VOX-9K is a lightweight local text-to-speech application using Kokoro neural TTS, with an optional experimental Qwen3-TTS 0.6B CUDA sidecar in this source checkout.
+
+## Runtime and Desktop V1 status
+
+This source release supports both the existing browser interface and an optional native Windows window. Real Kokoro CPU and Qwen CUDA generation, native playback and owned-service shutdown passed acceptance; the owner reported that speech sounded correct. The complete headless regression suite passes 135 tests.
+
+See [the Desktop V1 completion report](docs/DESKTOP_V1_REPORT.md), [launch instructions](docs/RUNNING.md), [desktop setup and packaging notes](docs/DESKTOP.md), [testing](docs/TESTING.md), and [third-party attribution](docs/THIRD_PARTY_NOTICES.md). Kokoro CUDA is unavailable in this machine's installed ONNX Runtime stack; Auto correctly falls back to CPU. Mac desktop support and standalone executable distribution are not available or claimed.
+
+This is a source-code release requiring Python, not a standalone executable or installer. The earlier [engineering audit](docs/ENGINEERING_AUDIT.md) remains a historical baseline; later [UI polish](docs/UI_POLISH_REPORT.md) and [Qwen audio corrections](docs/QWEN_AUDIO_REPORT.md) document subsequent acceptance. The owner supplied the included artwork's [AI-generated provenance and redistribution permission](docs/THIRD_PARTY_NOTICES.md#included-visual-assets-owner-supplied-provenance). Clean-machine installation remains unverified.
 
 It was originally created to make long ChatGPT and coding responses easier to consume without relying on cloud-based text-to-speech services.
 
@@ -14,22 +22,29 @@ Paste text into the browser interface, choose a voice and compute mode, then let
 
 ![VOX-9K Screenshot](screenshot.png)
 
+Historical application screenshot; the current UI includes a simplified header, chunk-level reading highlights and a subtle StelzTools footer.
+
 ---
 
 ## Features
 
 - Local neural text-to-speech
 - Kokoro TTS through PyKokoro
+- Experimental local Qwen streaming through faster-qwen3-tts in an isolated Windows CUDA environment
+- Scoped Qwen cancellation and persistent sidecar model ownership
+- Optional native Windows window through pywebview and WebView2
+- 135 passing model-free automated and real localhost integration tests
 - Multiple American and British voices
 - Automatic hardware selection
-- CPU inference support
-- NVIDIA CUDA GPU acceleration
+- Kokoro CPU inference support
+- Qwen NVIDIA CUDA support; Kokoro CUDA requires a separately compatible ONNX Runtime stack
 - Manual CPU / GPU selection
 - Background generation of upcoming speech chunks
 - Fast startup chunking for reduced perceived latency
 - Pause and resume from the current playback position
-- Stop playback instantly
-- Adjustable playback speed
+- Stop browser playback immediately, with cooperative Qwen server cancellation
+- Pitch-preserving playback speed, with corrected Qwen buffer-tail continuity and audio-clock scheduling
+- Chunk-level reading highlights that retain the full original text
 - Adjustable volume
 - Sentence-aware text segmentation
 - Markdown cleanup for AI and coding responses
@@ -41,7 +56,7 @@ Paste text into the browser interface, choose a voice and compute mode, then let
 
 ## How VOX-9K Works
 
-VOX-9K uses a small local Flask server to run the text-to-speech engine.
+VOX-9K uses a small local Flask server for the browser interface and Kokoro WAV synthesis. The optional Qwen path uses a second loopback service with a persistent CUDA model, graph warmup and framed PCM streaming to Web Audio. Kokoro CPU and Qwen CUDA passed real generation and native playback acceptance on the tested machine.
 
 The browser interface sends text chunks to the local server, which generates speech using Kokoro.
 
@@ -63,7 +78,7 @@ This helps audio begin quickly while allowing the generation pipeline to build e
 
 ### Minimum
 
-- Python 3.10 or newer
+- Python 3.12 for the tested Windows setup
 - Modern web browser
 - CPU capable of running ONNX Runtime
 - Internet connection during initial dependency/model setup
@@ -74,7 +89,7 @@ This helps audio begin quickly while allowing the generation pipeline to build e
 - NVIDIA RTX GPU for accelerated inference
 - Windows 10 or Windows 11
 
-VOX-9K works in CPU mode without an NVIDIA GPU.
+Kokoro works in CPU mode without an NVIDIA GPU. The optimized Qwen integration requires a compatible NVIDIA CUDA GPU; this application does not provide a Qwen CPU or Mac backend.
 
 ---
 
@@ -122,7 +137,7 @@ python -m pip install -r requirements.txt
 
 ## NVIDIA GPU Installation
 
-VOX-9K can use NVIDIA CUDA acceleration through PyKokoro's GPU runtime.
+Kokoro can request NVIDIA CUDA through PyKokoro's GPU runtime, but this machine's installed ONNX Runtime GPU stack has a CUDA DLL mismatch and Kokoro CPU is the verified path. The following is an optional setup recipe, not a verified clean-install guarantee. Qwen uses a separate CUDA environment described below.
 
 PyKokoro's CPU and GPU ONNX Runtime packages are alternatives. Use one provider installation per virtual environment.
 
@@ -144,12 +159,27 @@ You can check which ONNX providers are available with:
 .\.venv\Scripts\python.exe -c "import onnxruntime as ort; print(ort.get_available_providers())"
 ```
 
-A working NVIDIA setup should include:
+Provider listing alone does not prove working CUDA inference. A compatible installation can list:
 
 ```text
 CUDAExecutionProvider
 CPUExecutionProvider
 ```
+
+---
+
+## Optional optimized Qwen setup (Windows)
+
+Keep this stack isolated from Kokoro. Python 3.12, compatible NVIDIA drivers/CUDA support and sufficient VRAM are required. Acceptance used an RTX 3060 with 12 GiB and torch CUDA 12.6; that is a tested configuration, not a minimum-VRAM guarantee.
+
+These commands are setup recipes and can download large Python packages/model assets:
+
+~~~powershell
+py -3.12 -m venv .venv-fast
+.\.venv-fast\Scripts\python.exe -m pip install -r requirements-fast.txt
+~~~
+
+The parent service detects the Windows interpreter at .venv-fast/Scripts/python.exe and starts qwen_fast_server.py. Models are acquired separately by the engine at first load and cached locally; no weights are in this repository. See [runtime details and installation limits](docs/RUNNING.md). The requirements record the observed stack and have not been rehearsed on a clean machine. Do not install the older qwen_smoke_test.py recipe into the optimized environment.
 
 ---
 
@@ -162,6 +192,22 @@ Start the local server:
 ```cmd
 .\.venv\Scripts\python.exe server.py
 ```
+
+### Windows desktop mode
+
+Install the optional desktop dependencies if needed:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-desktop.txt
+```
+
+Open the native window:
+
+```powershell
+.\.venv\Scripts\python.exe desktop.py
+```
+
+This source-mode launcher requires Microsoft WebView2 Runtime. It preserves the existing browser command and does not provide an executable/installer. See [desktop setup](docs/DESKTOP.md).
 
 ### macOS / Linux
 
@@ -191,7 +237,7 @@ VOX-9K provides three compute options.
 Auto
 ```
 
-Automatically selects the best available inference provider.
+For Kokoro, tries CUDA when detected and verifies the actual ONNX session provider, falling back to CPU after a failed CUDA initialization. CoreML is not an exposed mode. Qwen uses its separate CUDA backend.
 
 If CUDA is available, the interface will display:
 
@@ -242,7 +288,7 @@ During the first request, the application may need to:
 
 Once the engine is warm, subsequent text generation is typically much faster.
 
-This means a cold first generation may take several seconds while later generations can feel nearly instant on sufficiently fast hardware.
+Cold startup, warm generation and cached waveform retrieval have different costs. The [runtime report](docs/DESKTOP_V1_REPORT.md) records measured conditions and results for this machine; these are not universal latency guarantees.
 
 ---
 
@@ -340,7 +386,7 @@ from being incorrectly interpreted as sentence boundaries.
 
 ## Local Processing and Privacy
 
-VOX-9K is designed to run locally.
+VOX-9K runs speech inference locally. Dependency, catalog, model and voice retrieval may require network access, including catalog refresh after caches already exist.
 
 Text submitted to VOX-9K is sent from the browser interface to the Flask server running on your own computer.
 
@@ -352,7 +398,7 @@ The Flask server is configured to listen on:
 127.0.0.1
 ```
 
-which limits access to the local machine by default.
+which limits access to the local machine by default. The Qwen sidecar also binds loopback, on port 5001. Host/Origin guards reject unrelated browser websites; this is not authentication against local software running under your account.
 
 ---
 
@@ -360,18 +406,18 @@ which limits access to the local machine by default.
 
 ```text
 VOX-9K/
-│
-├── index.html
-├── server.py
-├── background.png
-├── screenshot.png
-│
-├── requirements.txt
-├── requirements-gpu.txt
-│
-├── README.md
-├── LICENSE
-└── .gitignore
+  server.py                 # Browser/Kokoro service and Qwen ownership
+  desktop.py                # Optional Windows native-window entry point
+  qwen_fast_server.py        # Optimized CUDA streaming sidecar
+  local_security.py         # Loopback request guards
+  process_lifecycle.py      # Owned-process pipe monitoring
+  index.html, vox_helpers.js # UI, playback and framed PCM parser
+  background.png, screenshot.png
+  requirements*.txt         # Separate inference, desktop and test recipes
+  tests/                    # 135 model-free regression tests
+  tools/                    # Explicit environment/hardware acceptance tools
+  docs/                     # Launch, limitations, reports and notices
+  README.md, LICENSE, .gitignore
 ```
 
 The application will also create local runtime directories such as:
@@ -406,7 +452,11 @@ Known limitations include:
 - GPU support depends on compatible NVIDIA and ONNX Runtime configuration.
 - Background customization currently requires manually replacing `background.png`.
 - The current interface is primarily designed and tested as a local desktop application.
-- Hardware and platform testing is still limited.
+- Windows real speech/native playback passed short acceptance; macOS and clean-machine desktop installation remain unverified.
+- Kokoro native inference continues until the current call returns even after browser playback is stopped.
+- Qwen cancellation is cooperative between model steps, and paused playback can accumulate queued PCM.
+- Qwen uses per-buffer WSOLA with corrected tail continuity and scheduling. The owner accepted the corrected Aiden 1.5x sample. Other passages/voices and extreme speeds may still show artifacts; short buffers pass through unchanged. See the [audio report](docs/QWEN_AUDIO_REPORT.md).
+- Installation requirements are not fresh validated lockfiles. Preserve separate original and optimized Qwen environments.
 
 ---
 
@@ -422,7 +472,7 @@ Potential future improvements include:
 - Improved streaming
 - Additional hardware acceleration support
 - Cross-platform testing
-- Easier packaged desktop distribution
+- Future standalone executable/installer distribution, after packaging and clean-machine validation
 - Additional text cleanup controls
 
 ---
@@ -437,12 +487,15 @@ Potential future improvements include:
 - PyKokoro
 - Kokoro TTS
 - ONNX Runtime
+- Qwen3-TTS / faster-qwen3-tts
+- FastAPI / PyTorch / CUDA
+- pywebview / WebView2
 
 ---
 
 ## Credits
 
-VOX-9K uses the Kokoro text-to-speech model through the PyKokoro Python library.
+VOX-9K integrates Kokoro through PyKokoro, optional Qwen3-TTS through faster-qwen3-tts, and optional desktop presentation through pywebview. These are third-party components; see [notices](docs/THIRD_PARTY_NOTICES.md).
 
 Kokoro and PyKokoro are separate projects and retain their respective licenses and copyrights.
 
@@ -450,7 +503,7 @@ Kokoro and PyKokoro are separate projects and retain their respective licenses a
 
 ## License
 
-VOX-9K is released under the MIT License.
+VOX-9K original code is released under the MIT License. Dependencies, models, voices and third-party assets retain their own terms; see [attribution and open provenance checks](docs/THIRD_PARTY_NOTICES.md).
 
 See the `LICENSE` file for details.
 

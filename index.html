@@ -5,15 +5,17 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-    <title>VOX-9K by DSTΞLZNER</title>
+    <title>VOX-9K</title>
 
     <style>
         body {
             background-color: #121212;
 
             background:
-                linear-gradient(rgba(0, 0, 0, 0.65),
-                    rgba(0, 0, 0, 0.65)),
+                linear-gradient(
+                    rgba(0, 0, 0, 0.65),
+                    rgba(0, 0, 0, 0.65)
+                ),
                 url("/background.png");
 
             background-size: cover;
@@ -21,14 +23,17 @@
             background-repeat: no-repeat;
             background-attachment: fixed;
 
-            min-height: 100vh;
+            min-height: calc(100vh - 60px);
+            position: relative;
+            box-sizing: border-box;
+            padding-bottom: 28px;
 
             color: #e8e8e8;
             font-family: Arial, sans-serif;
             margin: 30px;
         }
 
-        textarea {
+        textarea, .read-view {
             width: 100%;
             max-width: 900px;
             min-height: 400px;
@@ -45,6 +50,8 @@
             line-height: 1.5;
 
             resize: vertical;
+            color: #bdc2c9;
+            font-family: monospace;
         }
 
         button {
@@ -64,7 +71,8 @@
             background-color: #3a3a3a;
         }
 
-        select {
+        select,
+        input[type="text"] {
             background-color: #2b2b2b;
             color: #e8e8e8;
 
@@ -73,6 +81,15 @@
 
             padding: 6px 10px;
             min-width: 240px;
+        }
+
+        input[type="text"] {
+            width: 460px;
+            max-width: calc(100vw - 180px);
+        }
+
+        .hidden {
+            display: none;
         }
 
         .controls {
@@ -113,20 +130,68 @@
             margin-top: 20px;
             color: #aaaaaa;
         }
+        [hidden] { display: none !important; }
+        .read-view {
+            display: inline-block;
+            position: relative;
+            white-space: pre-wrap;
+            overflow-wrap: break-word;
+            overflow: auto;
+        }
+        .read-view .read-through { color: #ffffff; }
+        .brand-footer {
+            position: absolute;
+            right: 0;
+            bottom: 3px;
+            color: rgba(255, 255, 255, 0.28);
+            font-size: 11px;
+            line-height: 16px;
+            pointer-events: none;
+            user-select: none;
+        }
     </style>
 </head>
 
 <body>
 
-    <h1>VOX-9K by DSTΞLZNER</h1>
+    <h1>VOX-9K</h1>
 
-    <textarea id="promptText" placeholder="Paste your message you'd like read here..."></textarea>
+    <textarea
+        id="promptText"
+        placeholder="Paste a ChatGPT or Codex prompt here..."
+    ></textarea>
+    <div id="readView" class="read-view" role="region" tabindex="0" hidden
+         aria-label="Reading progress: the current and completed speech chunks are highlighted"
+         aria-describedby="status"><span id="readCompleted" class="read-through"></span><span id="readCurrent" class="read-through"></span><span id="readRemaining"></span></div>
 
     <div class="controls">
 
         <button id="readButton">Read</button>
         <button id="pauseButton">Pause</button>
         <button id="stopButton">Stop</button>
+
+        <div class="control-row">
+            <label for="engineSelect">
+                Engine:
+            </label>
+
+            <select id="engineSelect">
+                <option value="kokoro" selected>
+                    Kokoro
+                </option>
+
+                <option value="qwen">
+                    Qwen3-TTS 0.6B
+                </option>
+            </select>
+
+            <span
+                id="engineInfo"
+                class="compute-info"
+            >
+                Fast / lightweight
+            </span>
+        </div>
 
         <div class="control-row">
             <label for="voiceSelect">
@@ -180,12 +245,18 @@
                     CPU
                 </option>
 
-                <option id="cudaOption" value="cuda">
+                <option
+                    id="cudaOption"
+                    value="cuda"
+                >
                     NVIDIA GPU
                 </option>
             </select>
 
-            <span id="computeInfo" class="compute-info">
+            <span
+                id="computeInfo"
+                class="compute-info"
+            >
                 Checking hardware...
             </span>
         </div>
@@ -195,9 +266,19 @@
                 Speed:
             </label>
 
-            <input type="range" id="speedSlider" min="0.5" max="2" step="0.1" value="1">
+            <input
+                type="range"
+                id="speedSlider"
+                min="0.5"
+                max="2"
+                step="0.1"
+                value="1"
+            >
 
-            <span id="speedValue" class="value-display">
+            <span
+                id="speedValue"
+                class="value-display"
+            >
                 1.0x
             </span>
         </div>
@@ -207,9 +288,19 @@
                 Volume:
             </label>
 
-            <input type="range" id="volumeSlider" min="0" max="1" step="0.1" value="1">
+            <input
+                type="range"
+                id="volumeSlider"
+                min="0"
+                max="1"
+                step="0.1"
+                value="1"
+            >
 
-            <span id="volumeValue" class="value-display">
+            <span
+                id="volumeValue"
+                class="value-display"
+            >
                 100%
             </span>
         </div>
@@ -220,6 +311,9 @@
         Ready
     </div>
 
+    <footer class="brand-footer">Created by: StelzTools</footer>
+
+    <script src="/vox_helpers.js"></script>
     <script>
 
         // ==================================================
@@ -237,6 +331,12 @@
 
         const promptText =
             document.getElementById("promptText");
+
+        const engineSelect =
+            document.getElementById("engineSelect");
+
+        const engineInfo =
+            document.getElementById("engineInfo");
 
         const voiceSelect =
             document.getElementById("voiceSelect");
@@ -287,52 +387,532 @@
         // The voice selected when Read is pressed.
         // Locking it for the session keeps prefetched chunks
         // from accidentally using a different voice.
+        let activeEngine = "kokoro";
+
+        let activeEngineLabel = "Kokoro";
+
         let activeVoice = "af_sarah";
 
         let activeVoiceLabel = "Sarah";
 
         let activeCompute = "auto";
 
-        let autoComputePreference = "unknown";
+        let systemInfo = null;
 
         const chunkAudioCache = new Map();
 
         const fetchControllers = new Map();
+
+        // Qwen fast streaming playback state.
+        let qwenAudioContext = null;
+        let qwenGainNode = null;
+        let qwenCurrentSource = null;
+        let qwenScheduledSources = [];
+        let qwenNextStartTime = 0;
+        let qwenAudioQueue = [];
+        let qwenGenerationComplete = false;
+        let qwenReadStartedAt = 0;
+        let qwenFirstAudioStarted = false;
+
+        const qwenStreamChunkSize = 8;
+        const qwenClientId = crypto.randomUUID();
+        let activeQwenRequestId = null;
+
+
+        // ==================================================
+        // ENGINE / VOICE OPTIONS
+        // ==================================================
+
+        const kokoroVoiceGroups = [
+            {
+                label: "American Female",
+                voices: [
+                    ["af_sarah", "Sarah"],
+                    ["af_heart", "Heart"],
+                    ["af_bella", "Bella"],
+                    ["af_nicole", "Nicole"],
+                    ["af_nova", "Nova"],
+                    ["af_sky", "Sky"]
+                ]
+            },
+            {
+                label: "American Male",
+                voices: [
+                    ["am_michael", "Michael"],
+                    ["am_fenrir", "Fenrir"],
+                    ["am_puck", "Puck"],
+                    ["am_onyx", "Onyx"],
+                    ["am_liam", "Liam"]
+                ]
+            },
+            {
+                label: "British Female",
+                voices: [
+                    ["bf_emma", "Emma"],
+                    ["bf_isabella", "Isabella"],
+                    ["bf_lily", "Lily"]
+                ]
+            },
+            {
+                label: "British Male",
+                voices: [
+                    ["bm_george", "George"],
+                    ["bm_fable", "Fable"],
+                    ["bm_lewis", "Lewis"],
+                    ["bm_daniel", "Daniel"]
+                ]
+            }
+        ];
+
+
+        const qwenVoiceGroups = [
+            {
+                label: "English Native",
+                voices: [
+                    [
+                        "Ryan",
+                        "Ryan - Dynamic Male (English)"
+                    ],
+                    [
+                        "Aiden",
+                        "Aiden - Sunny Male (English)"
+                    ]
+                ]
+            },
+            {
+                label: "Chinese Native",
+                voices: [
+                    [
+                        "Vivian",
+                        "Vivian - Bright Female (Chinese)"
+                    ],
+                    [
+                        "Serena",
+                        "Serena - Warm Female (Chinese)"
+                    ],
+                    [
+                        "Uncle_Fu",
+                        "Uncle Fu - Mellow Male (Chinese)"
+                    ],
+                    [
+                        "Dylan",
+                        "Dylan - Youthful Male (Chinese)"
+                    ],
+                    [
+                        "Eric",
+                        "Eric - Lively Male (Chinese)"
+                    ]
+                ]
+            },
+            {
+                label: "Japanese Native",
+                voices: [
+                    [
+                        "Ono_Anna",
+                        "Ono Anna - Playful Female (Japanese)"
+                    ]
+                ]
+            },
+            {
+                label: "Korean Native",
+                voices: [
+                    [
+                        "Sohee",
+                        "Sohee - Warm Female (Korean)"
+                    ]
+                ]
+            }
+        ];
+
+
+        function populateVoiceOptions() {
+
+            const engine =
+                engineSelect.value;
+
+
+            const groups =
+                engine === "qwen"
+                    ? qwenVoiceGroups
+                    : kokoroVoiceGroups;
+
+
+            voiceSelect.innerHTML = "";
+
+
+            for (const group of groups) {
+
+                const optgroup =
+                    document.createElement(
+                        "optgroup"
+                    );
+
+
+                optgroup.label =
+                    group.label;
+
+
+                for (
+                    const [
+                        value,
+                        label
+                    ]
+                    of group.voices
+                ) {
+
+                    const option =
+                        document.createElement(
+                            "option"
+                        );
+
+
+                    option.value =
+                        value;
+
+
+                    option.textContent =
+                        label;
+
+
+                    optgroup.appendChild(
+                        option
+                    );
+                }
+
+
+                voiceSelect.appendChild(
+                    optgroup
+                );
+            }
+
+
+            if (engine === "qwen") {
+
+                voiceSelect.value =
+                    "Ryan";
+
+            } else {
+
+                voiceSelect.value =
+                    "af_sarah";
+            }
+        }
+
+
+        function selectedEngineInfo() {
+
+            if (
+                !systemInfo ||
+                !systemInfo.engines
+            ) {
+
+                return null;
+            }
+
+
+            return (
+                systemInfo.engines[
+                    engineSelect.value
+                ]
+                || null
+            );
+        }
+
+
+        function resolvedComputeLabel(
+            mode,
+            engine = engineSelect.value
+        ) {
+
+            let engineInfo = null;
+
+
+            if (
+                systemInfo &&
+                systemInfo.engines
+            ) {
+
+                engineInfo =
+                    systemInfo.engines[
+                        engine
+                    ]
+                    || null;
+            }
+
+
+            if (mode === "auto") {
+
+                const preference =
+                    engineInfo
+                        ? engineInfo.auto_preference
+                        : "unknown";
+
+
+                if (
+                    preference === "cuda"
+                ) {
+
+                    return "NVIDIA GPU";
+                }
+
+
+                if (
+                    preference === "cpu"
+                ) {
+
+                    return "CPU";
+                }
+
+
+                return "Unknown";
+            }
+
+
+            if (mode === "cuda") {
+
+                return "NVIDIA GPU";
+            }
+
+
+            if (mode === "cpu") {
+
+                return "CPU";
+            }
+
+
+            return "Unknown";
+        }
+
+
+        function updateEngineUI() {
+
+            const engine =
+                engineSelect.value;
+
+
+            populateVoiceOptions();
+
+
+            if (engine === "qwen") {
+
+                const info =
+                    selectedEngineInfo();
+
+                const suffix =
+                    info &&
+                    info.status &&
+                    info.status !== "ready"
+                        ? " / " + info.status
+                        : "";
+
+                engineInfo.textContent =
+                    "Natural / streaming" +
+                    suffix;
+
+            } else {
+
+                engineInfo.textContent =
+                    "Fast / lightweight";
+            }
+
+
+            updateComputeAvailability();
+        }
+
+
+        function updateComputeAvailability() {
+
+            const info =
+                selectedEngineInfo();
+
+
+            const modes =
+                info && info.modes
+                    ? info.modes
+                    : null;
+
+
+            const cpuAvailable =
+                modes
+                    ? Boolean(
+                        modes.cpu
+                    )
+                    : true;
+
+
+            const cudaAvailable =
+                modes
+                    ? Boolean(
+                        modes.cuda
+                    )
+                    : false;
+
+
+            const autoAvailable =
+                modes
+                    ? Boolean(
+                        modes.auto
+                    )
+                    : true;
+
+
+            const autoOption =
+                computeSelect.querySelector(
+                    'option[value="auto"]'
+                );
+
+
+            const cpuOption =
+                computeSelect.querySelector(
+                    'option[value="cpu"]'
+                );
+
+
+            if (autoOption) {
+
+                autoOption.disabled =
+                    !autoAvailable;
+            }
+
+
+            if (cpuOption) {
+
+                cpuOption.disabled =
+                    !cpuAvailable;
+            }
+
+
+            cudaOption.disabled =
+                !cudaAvailable;
+
+
+            cudaOption.textContent =
+                cudaAvailable
+                    ? "NVIDIA GPU"
+                    : "NVIDIA GPU (Unavailable)";
+
+
+            if (
+                computeSelect.selectedOptions[
+                    0
+                ] &&
+                computeSelect.selectedOptions[
+                    0
+                ].disabled
+            ) {
+
+                if (autoAvailable) {
+
+                    computeSelect.value =
+                        "auto";
+
+                } else if (cpuAvailable) {
+
+                    computeSelect.value =
+                        "cpu";
+                }
+            }
+
+
+            updateComputeDisplay();
+        }
 
 
         // ==================================================
         // CLEAN TEXT
         // ==================================================
 
+        // Share the existing cleanup rules with an optional original-text offset map.
+        function prepareReadingText(raw, withOffsets = false) {
+            let text = raw;
+            let offsets = withOffsets ? Array.from({length: raw.length}, (_, i) => i) : null;
+            const rules = [
+                [/^={3,}\s*$/gm, ""], [/^-{3,}\s*$/gm, ""],
+                [/^_{3,}\s*$/gm, ""], [/^\*{3,}\s*$/gm, ""],
+                [/^~{3,}\s*$/gm, ""], [/^#{1,6}\s+/gm, ""],
+                [/\*\*/g, ""], [/__/g, ""], [/\x60/g, ""],
+                [/^>\s?/gm, ""], [/^\s*[-*+]\s+/gm, ""],
+                [/\n{3,}/g, "\n\n"]
+            ];
+            for (const [pattern, replacement] of rules) {
+                if (offsets) {
+                    const next = [];
+                    let cursor = 0;
+                    for (const match of text.matchAll(pattern)) {
+                        for (let i = cursor; i < match.index; i++) next.push(offsets[i]);
+                        for (let i = 0; i < replacement.length; i++) next.push(offsets[match.index + i]);
+                        cursor = match.index + match[0].length;
+                    }
+                    for (let i = cursor; i < text.length; i++) next.push(offsets[i]);
+                    offsets = next;
+                }
+                text = text.replace(pattern, replacement);
+            }
+            const leading = text.length - text.trimStart().length;
+            text = text.trim();
+            return {text, offsets: offsets ? offsets.slice(leading, leading + text.length) : null};
+        }
+
         function cleanText(text) {
+            return prepareReadingText(text).text;
+        }
 
-            return text
+        function readChunkEnds(raw, chunks) {
+            const prepared = prepareReadingText(raw, true);
+            let cursor = 0;
+            const ends = [];
+            for (const chunk of chunks) {
+                let end = 0;
+                for (let i = 0; i < chunk.length; i++) {
+                    if (/\s/.test(chunk[i])) continue;
+                    while (cursor < prepared.text.length && /\s/.test(prepared.text[cursor])) cursor++;
+                    if (prepared.text[cursor] !== chunk[i]) return [];
+                    end = prepared.offsets[cursor++] + 1;
+                }
+                ends.push(end);
+            }
+            return ends;
+        }
 
-                .replace(/^={3,}\s*$/gm, "")
+        const readView = document.getElementById("readView");
+        const readCompleted = document.getElementById("readCompleted");
+        const readCurrent = document.getElementById("readCurrent");
+        const readRemaining = document.getElementById("readRemaining");
+        let readingViewState = null;
 
-                .replace(/^-{3,}\s*$/gm, "")
+        function beginReadingView(raw, chunks, session) {
+            readView.style.height = getComputedStyle(promptText).height;
+            readingViewState = {raw, ends: readChunkEnds(raw, chunks), session, chunk: -1};
+            readCompleted.textContent = "";
+            readCurrent.textContent = "";
+            readRemaining.textContent = raw;
+            promptText.hidden = true;
+            readView.hidden = false;
+            readView.scrollTop = 0;
+        }
 
-                .replace(/^_{3,}\s*$/gm, "")
+        function markReadingChunk(index, session) {
+            const state = readingViewState;
+            if (!state || state.session !== session || session !== playbackSession ||
+                !isActive || isPaused || index <= state.chunk || index >= state.ends.length) return;
+            const start = index > 0 ? state.ends[index - 1] : 0;
+            const end = state.ends[index];
+            state.chunk = index;
+            readCompleted.textContent = state.raw.slice(0, start);
+            readCurrent.textContent = state.raw.slice(start, end);
+            readRemaining.textContent = state.raw.slice(end);
+            // Follow chunk boundaries inside the text area; never move the page.
+            const top = readCurrent.offsetTop;
+            if (top < readView.scrollTop || top > readView.scrollTop + readView.clientHeight - 24) {
+                readView.scrollTop = Math.max(0, top - 12);
+            }
+        }
 
-                .replace(/^\*{3,}\s*$/gm, "")
-
-                .replace(/^~{3,}\s*$/gm, "")
-
-                .replace(/^#{1,6}\s+/gm, "")
-
-                .replace(/\*\*/g, "")
-
-                .replace(/__/g, "")
-
-                .replace(/`/g, "")
-
-                .replace(/^>\s?/gm, "")
-
-                .replace(/^\s*[-*+]\s+/gm, "")
-
-                .replace(/\n{3,}/g, "\n\n")
-
-                .trim();
+        function endReadingView(session = playbackSession) {
+            if (readingViewState && readingViewState.session !== session) return;
+            readingViewState = null;
+            readView.hidden = true;
+            promptText.hidden = false;
         }
 
 
@@ -358,7 +938,7 @@
                     part =>
                         part.segment.trim()
                 )
-                    .filter(Boolean);
+                .filter(Boolean);
 
 
             const chunks = [];
@@ -370,7 +950,20 @@
             const normalChunkLength = 700;
 
 
-            for (const sentence of sentences) {
+            const boundedSentences = sentences.flatMap(sentence => {
+                const parts = [];
+                while (sentence.length > 3000) {
+                    let boundary = sentence.lastIndexOf(" ", 3000);
+                    if (boundary < 1) boundary = 3000;
+                    // Do not split a UTF-16 surrogate pair.
+                    if (/[\uD800-\uDBFF]/.test(sentence[boundary - 1])) boundary--;
+                    parts.push(sentence.slice(0, boundary));
+                    sentence = sentence.slice(boundary).trimStart();
+                }
+                if (sentence) parts.push(sentence);
+                return parts;
+            });
+            for (const sentence of boundedSentences) {
 
                 let targetLength;
 
@@ -437,6 +1030,41 @@
         // AUDIO CLEANUP
         // ==================================================
 
+        function cleanUpQwenAudio() {
+
+            // Stop both the audible source and the one scheduled ahead.
+            for (const source of qwenScheduledSources) {
+                source.onended = null;
+                try {
+                    source.stop();
+                } catch {
+                }
+            }
+            qwenScheduledSources = [];
+            qwenCurrentSource = null;
+            qwenNextStartTime = 0;
+
+            qwenAudioQueue = [];
+
+            qwenGenerationComplete = false;
+
+
+            if (qwenAudioContext) {
+
+                const contextToClose =
+                    qwenAudioContext;
+
+                qwenAudioContext = null;
+                qwenGainNode = null;
+
+                contextToClose.close().catch(
+                    function () {
+                    }
+                );
+            }
+        }
+
+
         function cleanUpAudio() {
 
             if (currentAudio) {
@@ -444,6 +1072,7 @@
                 currentAudio.pause();
 
                 currentAudio.onended = null;
+                currentAudio.onplaying = null;
 
                 currentAudio.onerror = null;
 
@@ -459,6 +1088,9 @@
 
                 currentAudioUrl = null;
             }
+
+
+            cleanUpQwenAudio();
         }
 
 
@@ -489,36 +1121,50 @@
 
         function applyAudioSettings() {
 
-            if (!currentAudio) {
-                return;
-            }
-
-
-            currentAudio.volume =
+            const volume =
                 Number(
                     volumeSlider.value
                 );
 
-
-            currentAudio.playbackRate =
+            const speed =
                 Number(
                     speedSlider.value
                 );
 
 
-            if (
-                "preservesPitch"
-                in currentAudio
-            ) {
+            if (currentAudio) {
 
-                currentAudio.preservesPitch =
-                    true;
+                currentAudio.volume =
+                    volume;
+
+                currentAudio.playbackRate =
+                    speed;
+
+                if (
+                    "preservesPitch"
+                    in currentAudio
+                ) {
+
+                    currentAudio.preservesPitch =
+                        true;
+                }
             }
+
+
+            if (qwenGainNode) {
+
+                qwenGainNode.gain.value =
+                    volume;
+            }
+
+
+            // Qwen Fast uses pitch-preserving PCM
+            // time stretching instead of playbackRate.
         }
 
 
         // ==================================================
-        // REQUEST KOKORO AUDIO
+        // REQUEST TTS AUDIO
         // ==================================================
 
         async function fetchChunkAudio(
@@ -577,8 +1223,11 @@
                                         JSON.stringify({
                                             text:
                                                 speechChunks[
-                                                chunkIndex
+                                                    chunkIndex
                                                 ],
+
+                                            engine:
+                                                activeEngine,
 
                                             voice:
                                                 activeVoice,
@@ -637,9 +1286,9 @@
 
                     } finally {
 
-                        fetchControllers.delete(
-                            chunkIndex
-                        );
+                        if (fetchControllers.get(chunkIndex) === controller) {
+                            fetchControllers.delete(chunkIndex);
+                        }
                     }
 
                 })();
@@ -658,12 +1307,864 @@
 
             } catch (error) {
 
-                chunkAudioCache.delete(
-                    chunkIndex
-                );
+                if (chunkAudioCache.get(chunkIndex) === requestPromise) {
+                    chunkAudioCache.delete(chunkIndex);
+                }
 
 
                 throw error;
+            }
+        }
+
+
+        // ==================================================
+        // QWEN FAST STREAMING PLAYBACK
+        // ==================================================
+
+        function qwenStreamUrl() {
+
+            const qwenInfo =
+                systemInfo &&
+                systemInfo.engines
+                    ? systemInfo.engines.qwen
+                    : null;
+
+
+            return (
+                qwenInfo &&
+                qwenInfo.stream_url
+            )
+                ? qwenInfo.stream_url
+                : "http://127.0.0.1:5001/stream";
+        }
+
+
+        function qwenHealthUrl() {
+
+            return qwenStreamUrl().replace(
+                /\/stream$/,
+                "/health"
+            );
+        }
+
+        function qwenCancelUrl() {
+
+            return qwenStreamUrl().replace(
+                /\/stream$/,
+                "/cancel"
+            );
+        }
+
+
+        function cancelQwenServerGeneration() {
+            const requestId = activeQwenRequestId;
+            if (!requestId) return;
+            activeQwenRequestId = null;
+            fetch(
+                qwenCancelUrl(),
+                {
+                    method: "POST",
+
+                    headers: {
+                        "Content-Type":
+                            "application/json"
+                    },
+
+                    body:
+                        JSON.stringify({request_id: requestId}),
+
+                    keepalive: true
+                }
+            )
+            .catch(function () {
+                // Best effort. A new Qwen stream also
+                // cancels any older server-side generation.
+            });
+        }
+
+
+
+        function delay(milliseconds) {
+
+            return new Promise(
+                resolve =>
+                    setTimeout(
+                        resolve,
+                        milliseconds
+                    )
+            );
+        }
+
+
+        function prepareQwenAudioContext() {
+
+            if (!qwenAudioContext) {
+
+                const AudioContextClass =
+                    window.AudioContext ||
+                    window.webkitAudioContext;
+
+
+                qwenAudioContext =
+                    new AudioContextClass();
+
+
+                qwenGainNode =
+                    qwenAudioContext.createGain();
+
+
+                qwenGainNode.connect(
+                    qwenAudioContext.destination
+                );
+
+
+                applyAudioSettings();
+            }
+
+
+            if (
+                !isPaused &&
+                qwenAudioContext.state ===
+                    "suspended"
+            ) {
+
+                qwenAudioContext.resume().catch(
+                    function () {
+                    }
+                );
+            }
+        }
+
+
+        async function waitForQwenReady(session) {
+            const deadline = Date.now() + 120000;
+            while (Date.now() < deadline) {
+                if (session !== playbackSession) {
+                    throw new DOMException("Playback cancelled", "AbortError");
+                }
+                const controller = new AbortController();
+                const key = "qwen-health-" + session;
+                fetchControllers.set(key, controller);
+                const timer = setTimeout(() => controller.abort(), 2000);
+                let info = null;
+                try {
+                    const response = await fetch(qwenHealthUrl(), {
+                        cache: "no-store", signal: controller.signal
+                    });
+                    if (response.ok) info = await response.json();
+                } catch {
+                    // Transport errors and per-poll timeouts can recover during startup.
+                } finally {
+                    clearTimeout(timer);
+                    if (fetchControllers.get(key) === controller) fetchControllers.delete(key);
+                }
+                if (session !== playbackSession) {
+                    throw new DOMException("Playback cancelled", "AbortError");
+                }
+                if (info && info.status === "ready") return info;
+                if (info && info.status === "error") {
+                    throw new Error("Qwen fast engine failed to start. Check the local sidecar console.");
+                }
+                statusDisplay.textContent = info
+                    ? "Warming Qwen3-TTS on NVIDIA GPU..."
+                    : "Starting Qwen fast engine...";
+                await delay(250);
+            }
+            throw new Error("Qwen fast engine did not become ready in time.");
+        }
+
+
+        function finishQwenIfDone(
+            session
+        ) {
+
+            if (
+                session !==
+                playbackSession
+            ) {
+
+                return;
+            }
+
+
+            if (
+                !qwenGenerationComplete ||
+                qwenCurrentSource ||
+                qwenAudioQueue.length > 0
+            ) {
+
+                return;
+            }
+
+
+            isActive = false;
+            isPaused = false;
+
+            pauseButton.textContent =
+                "Pause";
+
+            endReadingView(session);
+            statusDisplay.textContent =
+                "Finished";
+        }
+
+
+        // ==================================================
+        // QWEN PITCH-PRESERVING SPEED
+        // ==================================================
+
+        function stretchQwenPcmPreservePitch(
+            samples,
+            speed
+        ) {
+
+            if (
+                !samples ||
+                samples.length < 2048 ||
+                Math.abs(speed - 1) < 0.01
+            ) {
+
+                return samples;
+            }
+
+
+            // Lightweight WSOLA-style time stretching.
+            // Frames are moved closer together or farther apart
+            // without resampling them, so pitch stays stable.
+            const frameSize = 1024;
+            const overlap = 512;
+            const synthesisHop =
+                frameSize - overlap;
+
+            const analysisHop =
+                synthesisHop * speed;
+
+            const searchRadius = 96;
+            const searchStep = 4;
+
+            const targetLength =
+                Math.max(
+                    1,
+                    Math.round(
+                        samples.length / speed
+                    )
+                );
+
+            const output =
+                new Float32Array(
+                    targetLength +
+                    frameSize +
+                    overlap
+                );
+
+
+            const firstLength =
+                Math.min(
+                    frameSize,
+                    samples.length
+                );
+
+            output.set(
+                samples.subarray(
+                    0,
+                    firstLength
+                ),
+                0
+            );
+
+
+            let written =
+                firstLength;
+
+            let outputPos =
+                synthesisHop;
+
+            let expectedInputPos =
+                analysisHop;
+
+            const maxCandidate =
+                Math.max(
+                    0,
+                    samples.length -
+                    frameSize
+                );
+
+
+            const finalStart = Math.max(0, targetLength - frameSize);
+            while (
+                outputPos < finalStart &&
+                expectedInputPos <
+                    samples.length - overlap
+            ) {
+
+                const expected =
+                    Math.max(
+                        0,
+                        Math.min(
+                            maxCandidate,
+                            Math.round(
+                                expectedInputPos
+                            )
+                        )
+                    );
+
+
+                let bestCandidate =
+                    expected;
+
+
+                const searchStart =
+                    Math.max(
+                        0,
+                        expected -
+                        searchRadius
+                    );
+
+                const searchEnd =
+                    Math.min(
+                        maxCandidate,
+                        expected +
+                        searchRadius
+                    );
+
+
+                const availableOverlap =
+                    Math.min(
+                        overlap,
+                        Math.max(
+                            0,
+                            written -
+                            outputPos
+                        )
+                    );
+
+
+                if (
+                    availableOverlap >= 128
+                ) {
+
+                    let outputEnergy = 0;
+
+
+                    for (
+                        let i = 0;
+                        i < availableOverlap;
+                        i += 4
+                    ) {
+
+                        const value =
+                            output[
+                                outputPos + i
+                            ];
+
+                        outputEnergy +=
+                            value * value;
+                    }
+
+
+                    let bestScore =
+                        -Infinity;
+
+
+                    for (
+                        let candidate =
+                            searchStart;
+                        candidate <=
+                            searchEnd;
+                        candidate +=
+                            searchStep
+                    ) {
+
+                        let dot = 0;
+                        let inputEnergy = 0;
+
+
+                        for (
+                            let i = 0;
+                            i <
+                                availableOverlap;
+                            i += 4
+                        ) {
+
+                            const outValue =
+                                output[
+                                    outputPos + i
+                                ];
+
+                            const inValue =
+                                samples[
+                                    candidate + i
+                                ];
+
+                            dot +=
+                                outValue *
+                                inValue;
+
+                            inputEnergy +=
+                                inValue *
+                                inValue;
+                        }
+
+
+                        const denominator =
+                            Math.sqrt(
+                                outputEnergy *
+                                inputEnergy
+                            ) + 1e-12;
+
+                        const score =
+                            dot /
+                            denominator;
+
+
+                        if (
+                            score >
+                            bestScore
+                        ) {
+
+                            bestScore =
+                                score;
+
+                            bestCandidate =
+                                candidate;
+                        }
+                    }
+                }
+
+
+                const availableFrame =
+                    Math.min(
+                        frameSize,
+                        samples.length -
+                            bestCandidate,
+                        output.length -
+                            outputPos
+                    );
+
+
+                const actualOverlap =
+                    Math.min(
+                        overlap,
+                        availableFrame,
+                        Math.max(
+                            0,
+                            written -
+                            outputPos
+                        )
+                    );
+
+
+                // Cosine crossfade between the existing tail
+                // and the newly aligned frame.
+                for (
+                    let i = 0;
+                    i < actualOverlap;
+                    i++
+                ) {
+
+                    const t =
+                        (i + 1) /
+                        (actualOverlap + 1);
+
+                    const newWeight =
+                        0.5 -
+                        0.5 *
+                        Math.cos(
+                            Math.PI * t
+                        );
+
+                    const oldWeight =
+                        1 - newWeight;
+
+                    output[
+                        outputPos + i
+                    ] =
+                        (
+                            output[
+                                outputPos + i
+                            ] *
+                            oldWeight
+                        ) +
+                        (
+                            samples[
+                                bestCandidate + i
+                            ] *
+                            newWeight
+                        );
+                }
+
+
+                for (
+                    let i =
+                        actualOverlap;
+                    i <
+                        availableFrame;
+                    i++
+                ) {
+
+                    output[
+                        outputPos + i
+                    ] =
+                        samples[
+                            bestCandidate + i
+                        ];
+                }
+
+
+                written =
+                    Math.max(
+                        written,
+                        outputPos +
+                            availableFrame
+                    );
+
+
+                outputPos +=
+                    synthesisHop;
+
+                expectedInputPos +=
+                    analysisHop;
+            }
+
+
+            // Anchor the final frame to the real input tail. Truncating a regular
+            // WSOLA frame here discards tail samples and creates a phase jump
+            // when the next independently processed PCM frame starts.
+            const tailLength = targetLength - finalStart;
+            const inputTail = samples.length - tailLength;
+            const crossfade = Math.min(overlap, tailLength, Math.max(0, written - finalStart));
+            for (let i = 0; i < tailLength; i++) {
+                const weight = i < crossfade && crossfade > 1
+                    ? 0.5 - 0.5 * Math.cos(Math.PI * i / (crossfade - 1))
+                    : 1;
+                output[finalStart + i] =
+                    output[finalStart + i] * (1 - weight) + samples[inputTail + i] * weight;
+            }
+            return output.slice(0, targetLength);
+        }
+
+
+        function showQwenSourceProgress(source, session) {
+            const chunkIndex = source.voxTextChunkIndex;
+            let detail = "";
+            if (!qwenFirstAudioStarted) {
+                qwenFirstAudioStarted = true;
+                const ttfa = (performance.now() - qwenReadStartedAt) / 1000;
+                detail = " - TTFA " + ttfa.toFixed(2) + "s";
+            }
+            statusDisplay.textContent =
+                "Reading " + (chunkIndex + 1) + " / " + speechChunks.length +
+                " - " + activeVoiceLabel + " - Qwen Fast" + detail;
+            markReadingChunk(chunkIndex, session);
+        }
+
+
+        function playNextQwenBuffer(session) {
+            if (session !== playbackSession || isPaused) return;
+
+            // Keep only one buffer ahead. Its start is set on the audio clock,
+            // rather than waiting for an ended event to process the next frame.
+            // Speed edits take effect as the next unscheduled frame is prepared.
+            while (qwenAudioQueue.length && qwenScheduledSources.length < 2) {
+                prepareQwenAudioContext();
+                const item = qwenAudioQueue.shift();
+                const playbackSamples = stretchQwenPcmPreservePitch(
+                    item.samples, Number(speedSlider.value)
+                );
+                const audioBuffer = qwenAudioContext.createBuffer(
+                    1, playbackSamples.length, item.sampleRate
+                );
+                audioBuffer.copyToChannel(playbackSamples, 0);
+                const source = qwenAudioContext.createBufferSource();
+                source.buffer = audioBuffer;
+                source.playbackRate.value = 1;
+                source.voxTextChunkIndex = item.textChunkIndex;
+                source.connect(qwenGainNode);
+
+                source.onended = function () {
+                    if (session !== playbackSession) return;
+                    const index = qwenScheduledSources.indexOf(source);
+                    if (index < 0) return;
+                    qwenScheduledSources.splice(index, 1);
+                    qwenCurrentSource = qwenScheduledSources[0] || null;
+                    if (index === 0 && qwenCurrentSource) {
+                        showQwenSourceProgress(qwenCurrentSource, session);
+                    }
+                    playNextQwenBuffer(session);
+                };
+
+                const startTime = Math.max(qwenAudioContext.currentTime, qwenNextStartTime);
+                qwenNextStartTime = startTime + playbackSamples.length / item.sampleRate;
+                qwenScheduledSources.push(source);
+                qwenCurrentSource = qwenScheduledSources[0];
+                source.start(startTime);
+                if (qwenCurrentSource === source) {
+                    showQwenSourceProgress(source, session);
+                }
+            }
+            finishQwenIfDone(session);
+        }
+
+
+        function enqueueQwenPcm(
+            samples,
+            sampleRate,
+            textChunkIndex,
+            session
+        ) {
+
+            if (
+                session !==
+                playbackSession
+            ) {
+
+                return;
+            }
+
+
+            qwenAudioQueue.push({
+                samples:
+                    samples,
+
+                sampleRate:
+                    sampleRate,
+
+                textChunkIndex:
+                    textChunkIndex
+            });
+
+
+            playNextQwenBuffer(
+                session
+            );
+        }
+
+
+        async function streamQwenTextChunk(
+            textChunkIndex,
+            session
+        ) {
+
+            const controller =
+                new AbortController();
+
+
+            const controllerKey =
+                "qwen-" +
+                textChunkIndex;
+            const requestId = qwenClientId + ":" + session + ":" + textChunkIndex;
+            activeQwenRequestId = requestId;
+            let reader = null;
+
+
+            fetchControllers.set(
+                controllerKey,
+                controller
+            );
+
+
+            try {
+
+                const response =
+                    await fetch(
+                        qwenStreamUrl(),
+                        {
+                            method: "POST",
+
+                            headers: {
+                                "Content-Type":
+                                    "application/json"
+                            },
+
+                            body:
+                                JSON.stringify({
+                                    text:
+                                        speechChunks[
+                                            textChunkIndex
+                                        ],
+
+                                    speaker:
+                                        activeVoice,
+
+                                    language:
+                                        "English",
+
+                                    chunk_size:
+                                        qwenStreamChunkSize,
+
+                                    request_id:
+                                        requestId
+                                }),
+
+                            signal:
+                                controller.signal
+                        }
+                    );
+
+
+                if (!response.ok) {
+
+                    let message =
+                        "Qwen streaming generation failed.";
+
+
+                    try {
+
+                        const errorData =
+                            await response.json();
+
+
+                        if (errorData.detail) {
+                            message =
+                                errorData.detail;
+                        }
+
+                    } catch {
+                    }
+
+
+                    throw new Error(
+                        message
+                    );
+                }
+
+
+                if (!response.body) {
+
+                    throw new Error(
+                        "Browser streaming response is unavailable."
+                    );
+                }
+
+
+                reader = response.body.getReader();
+                const parser = new VoxPcmParser();
+                while (true) {
+                    const result = await reader.read();
+                    if (session !== playbackSession) {
+                        controller.abort();
+                        return;
+                    }
+                    if (result.done) {
+                        parser.finish();
+                        return;
+                    }
+                    for (const frame of parser.push(result.value)) {
+                        enqueueQwenPcm(frame.samples, frame.sampleRate, textChunkIndex, session);
+                    }
+                    if (parser.ended) return;
+                }
+
+            } finally {
+
+                if (reader) {
+                    try { await reader.cancel(); } catch {}
+                    reader.releaseLock();
+                }
+                if (fetchControllers.get(controllerKey) === controller) {
+                    fetchControllers.delete(controllerKey);
+                }
+                if (activeQwenRequestId === requestId) activeQwenRequestId = null;
+            }
+        }
+
+
+        async function playQwenSession(
+            session
+        ) {
+
+            try {
+
+                await waitForQwenReady(
+                    session
+                );
+
+
+                for (
+                    let index = 0;
+                    index < speechChunks.length;
+                    index++
+                ) {
+
+                    if (
+                        session !==
+                        playbackSession
+                    ) {
+
+                        return;
+                    }
+
+
+                    currentChunk =
+                        index;
+
+
+                    if (
+                        !qwenCurrentSource &&
+                        qwenAudioQueue.length === 0
+                    ) {
+
+                        statusDisplay.textContent =
+                            "Preparing " +
+                            (index + 1) +
+                            " / " +
+                            speechChunks.length +
+                            " - Qwen Fast";
+                    }
+
+
+                    await streamQwenTextChunk(
+                        index,
+                        session
+                    );
+                }
+
+
+                if (
+                    session !==
+                    playbackSession
+                ) {
+
+                    return;
+                }
+
+
+                qwenGenerationComplete =
+                    true;
+
+
+                finishQwenIfDone(
+                    session
+                );
+
+            } catch (error) {
+                if (session !== playbackSession) return;
+
+                if (
+                    error.name ===
+                    "AbortError"
+                ) {
+
+                    return;
+                }
+
+
+                console.error(
+                    "Qwen Fast error:",
+                    error
+                );
+
+
+                statusDisplay.textContent =
+                    "Error: " +
+                    error.message;
+
+
+                isActive = false;
+                endReadingView(session);
+
+                cancelAllRequests();
+                cleanUpQwenAudio();
             }
         }
 
@@ -702,19 +2203,19 @@
                 nextChunk,
                 session
             )
-                .catch(function (error) {
+            .catch(function (error) {
 
-                    if (
-                        error.name !==
-                        "AbortError"
-                    ) {
+                if (
+                    error.name !==
+                    "AbortError"
+                ) {
 
-                        console.error(
-                            "Prefetch error:",
-                            error
-                        );
-                    }
-                });
+                    console.error(
+                        "Prefetch error:",
+                        error
+                    );
+                }
+            });
         }
 
 
@@ -752,6 +2253,7 @@
                     "Pause";
 
 
+                endReadingView(session);
                 statusDisplay.textContent =
                     "Finished";
 
@@ -809,6 +2311,9 @@
                 applyAudioSettings();
 
 
+                currentAudio.onplaying = function () {
+                    markReadingChunk(currentChunk, session);
+                };
                 currentAudio.onended =
                     function () {
 
@@ -841,6 +2346,7 @@
 
 
                         isActive = false;
+                        endReadingView(session);
                     };
 
 
@@ -863,10 +2369,13 @@
                     " / " +
                     speechChunks.length +
                     " - " +
+                    activeEngineLabel +
+                    " - " +
                     activeVoiceLabel +
                     " - " +
                     resolvedComputeLabel(
-                        activeCompute
+                        activeCompute,
+                        activeEngine
                     );
 
 
@@ -879,6 +2388,7 @@
 
 
             } catch (error) {
+                if (session !== playbackSession) return;
 
                 if (
                     error.name ===
@@ -901,6 +2411,7 @@
 
 
                 isActive = false;
+                endReadingView(session);
             }
         }
 
@@ -913,6 +2424,12 @@
             "click",
             function () {
 
+                if (activeEngine === "qwen") cancelQwenServerGeneration();
+                isActive = false;
+                isPaused = false;
+                pauseButton.textContent = "Pause";
+
+                endReadingView();
                 playbackSession++;
 
 
@@ -950,8 +2467,17 @@
                 }
 
 
-                // Lock in the selected voice for this
-                // entire Read session.
+                // Lock in the selected engine, voice,
+                // and compute mode for the entire
+                // Read session.
+                activeEngine =
+                    engineSelect.value;
+
+                activeEngineLabel =
+                    engineSelect.options[
+                        engineSelect.selectedIndex
+                    ].text;
+
                 activeVoice =
                     voiceSelect.value;
 
@@ -978,10 +2504,37 @@
                 const session =
                     playbackSession;
 
+                beginReadingView(rawText, speechChunks, session);
 
-                playCurrentChunk(
-                    session
-                );
+
+                if (
+                    activeEngine ===
+                    "qwen"
+                ) {
+
+                    qwenGenerationComplete =
+                        false;
+
+                    qwenReadStartedAt =
+                        performance.now();
+
+                    qwenFirstAudioStarted =
+                        false;
+
+                    // Create/resume the Web Audio context while
+                    // we are still inside the user's Read click.
+                    prepareQwenAudioContext();
+
+                    playQwenSession(
+                        session
+                    );
+
+                } else {
+
+                    playCurrentChunk(
+                        session
+                    );
+                }
             }
         );
 
@@ -993,8 +2546,53 @@
         pauseButton.addEventListener(
             "click",
             async function () {
+                const session = playbackSession;
 
                 if (!isActive) {
+                    return;
+                }
+
+
+                if (
+                    activeEngine ===
+                    "qwen"
+                ) {
+
+                    if (isPaused) {
+
+                        isPaused = false;
+
+                        pauseButton.textContent =
+                            "Pause";
+
+                        if (qwenAudioContext) {
+                            await qwenAudioContext.resume();
+                            if (session !== playbackSession) return;
+                        }
+
+                        playNextQwenBuffer(
+                            playbackSession
+                        );
+
+                        statusDisplay.textContent =
+                            "Reading - Qwen Fast";
+
+                    } else {
+
+                        isPaused = true;
+
+                        pauseButton.textContent =
+                            "Resume";
+
+                        if (qwenAudioContext) {
+                            await qwenAudioContext.suspend();
+                            if (session !== playbackSession) return;
+                        }
+
+                        statusDisplay.textContent =
+                            "Paused";
+                    }
+
                     return;
                 }
 
@@ -1023,6 +2621,7 @@
                         try {
 
                             await currentAudio.play();
+                            if (session !== playbackSession) return;
 
                         } catch (error) {
 
@@ -1079,6 +2678,15 @@
             "click",
             function () {
 
+                if (
+                    activeEngine === "qwen"
+                ) {
+
+                    cancelQwenServerGeneration();
+                }
+
+
+                endReadingView();
                 playbackSession++;
 
 
@@ -1111,47 +2719,72 @@
         // COMPUTE AVAILABILITY
         // ==================================================
 
-        function resolvedComputeLabel(
-            mode
-        ) {
+        async function loadSystemInfo() {
 
-            if (mode === "auto") {
+            try {
 
-                if (
-                    autoComputePreference ===
-                    "cuda"
-                ) {
+                const response =
+                    await fetch(
+                        "/system-info"
+                    );
 
-                    return "NVIDIA GPU";
+
+                if (!response.ok) {
+
+                    throw new Error(
+                        "Could not read system info."
+                    );
                 }
 
 
+                systemInfo =
+                    await response.json();
+
+
+                const qwenInfo =
+                    systemInfo.engines
+                        ? systemInfo.engines.qwen
+                        : null;
+
+
+                const qwenOption =
+                    engineSelect.querySelector(
+                        'option[value="qwen"]'
+                    );
+
+
                 if (
-                    autoComputePreference ===
-                    "cpu"
+                    qwenOption &&
+                    qwenInfo &&
+                    !qwenInfo.installed
                 ) {
 
-                    return "CPU";
+                    qwenOption.disabled =
+                        true;
+
+                    qwenOption.textContent =
+                        "Qwen3-TTS 0.6B (Not installed)";
                 }
 
 
-                return "Unknown";
+                updateComputeAvailability();
+
+
+            } catch (error) {
+
+                console.error(
+                    "System info error:",
+                    error
+                );
+
+
+                computeInfo.textContent =
+                    "Hardware check failed";
+
+
+                cudaOption.disabled =
+                    true;
             }
-
-
-            if (mode === "cuda") {
-
-                return "NVIDIA GPU";
-            }
-
-
-            if (mode === "cpu") {
-
-                return "CPU";
-            }
-
-
-            return "Unknown";
         }
 
 
@@ -1180,98 +2813,19 @@
         }
 
 
-        async function loadSystemInfo() {
-
-            try {
-
-                const response =
-                    await fetch(
-                        "/system-info"
-                    );
-
-
-                if (!response.ok) {
-
-                    throw new Error(
-                        "Could not read system info."
-                    );
-                }
-
-
-                const info =
-                    await response.json();
-
-
-                autoComputePreference =
-                    info.auto_preference
-                    || "unknown";
-
-
-                const cudaAvailable =
-                    Boolean(
-                        info.modes &&
-                        info.modes.cuda
-                    );
-
-
-                const cpuAvailable =
-                    Boolean(
-                        info.modes &&
-                        info.modes.cpu
-                    );
-
-
-                cudaOption.disabled =
-                    !cudaAvailable;
-
-
-                if (cudaAvailable) {
-
-                    cudaOption.textContent =
-                        "NVIDIA GPU";
-
-                } else {
-
-                    cudaOption.textContent =
-                        "NVIDIA GPU (Unavailable)";
-                }
-
-
-                const cpuOption =
-                    computeSelect.querySelector(
-                        'option[value="cpu"]'
-                    );
-
-
-                if (cpuOption) {
-
-                    cpuOption.disabled =
-                        !cpuAvailable;
-                }
-
-
-                updateComputeDisplay();
-
-
-            } catch (error) {
-
-                console.error(
-                    "System info error:",
-                    error
-                );
-
-
-                computeInfo.textContent =
-                    "Hardware check failed";
-
-
-                cudaOption.disabled =
-                    true;
-            }
-        }
-
+        window.addEventListener("pagehide", () => {
+            cancelQwenServerGeneration();
+            cancelAllRequests();
+        });
+        populateVoiceOptions();
 
         loadSystemInfo();
+
+
+        engineSelect.addEventListener(
+            "change",
+            updateEngineUI
+        );
 
 
         computeSelect.addEventListener(
@@ -1302,6 +2856,11 @@
                             speedSlider.value
                         );
                 }
+
+
+                // Qwen Fast applies the new speed to
+                // the next streamed PCM buffer while
+                // preserving voice pitch.
             }
         );
 
@@ -1325,6 +2884,15 @@
                 if (currentAudio) {
 
                     currentAudio.volume =
+                        Number(
+                            volumeSlider.value
+                        );
+                }
+
+
+                if (qwenGainNode) {
+
+                    qwenGainNode.gain.value =
                         Number(
                             volumeSlider.value
                         );
