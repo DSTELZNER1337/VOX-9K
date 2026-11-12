@@ -4,6 +4,8 @@ from pathlib import Path
 import os
 import sys
 
+from chunk_cache import ChunkCache
+
 import anyio
 from starlette.concurrency import run_in_threadpool
 from local_security import LocalOnlyMiddleware
@@ -33,6 +35,7 @@ MODEL_ID = "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"
 HOST = "127.0.0.1"
 PORT = 5001
 DEFAULT_CHUNK_SIZE = 8
+pcm_cache = ChunkCache(BASE_DIR / "temp" / "qwen-audio-cache")
 
 VALID_SPEAKERS = {
     "Vivian",
@@ -86,6 +89,7 @@ _state = {
 
 
 class StreamRequest(BaseModel):
+    export: bool = False
     text: str
     speaker: str = "Ryan"
     language: str = "English"
@@ -102,7 +106,7 @@ def update_state(**changes):
         _state.update(changes)
 
 
-def begin_generation(request_id):
+def begin_generation(request_id, only_if_idle=False):
     """
     Register a new Qwen generation.
 
@@ -113,6 +117,8 @@ def begin_generation(request_id):
     cancel_event = threading.Event()
 
     with _generation_lock:
+        if only_if_idle and _current_generation.get("cancel_event") is not None:
+            raise HTTPException(status_code=409, detail="Qwen is busy. Stop reading before exporting.")
         now = time.monotonic()
         for key, expires in list(_cancelled_requests.items()):
             if expires < now:
@@ -355,13 +361,19 @@ def stream(request_data: StreamRequest):
         )
 
     cancel_event = begin_generation(
-        request_id
+        request_id, only_if_idle=request_data.export
     )
 
     def framed_audio():
         frame_index = 0
         sample_rate = 24000
         model_generator = None
+        cache_context = pcm_cache.record(text, speaker)
+        cache_record = None
+        try:
+            cache_record = cache_context.__enter__()
+        except OSError:
+            pass
 
         try:
             while not _model_lock.acquire(timeout=0.1):
@@ -406,6 +418,8 @@ def stream(request_data: StreamRequest):
                         if int(sample_rate) != 24000 or not pcm.size or not np.isfinite(pcm).all():
                             raise ValueError("Invalid generated PCM format")
                         payload = pcm.tobytes()
+                        if cache_record is not None:
+                            cache_record.write(payload)
 
                         # Frame format, little endian:
                         # uint32 payload_bytes
@@ -426,6 +440,8 @@ def stream(request_data: StreamRequest):
                     # Only send a normal end frame when the request
                     # was not cancelled.
                     if not cancel_event.is_set():
+                        if cache_record is not None:
+                            cache_record.complete = True
                         yield struct.pack(
                             "<IIII",
                             0,
@@ -439,6 +455,7 @@ def stream(request_data: StreamRequest):
                         if callable(close_method):
                             close_method()
             finally:
+                finish_generation(request_id, cancel_event)
                 _model_lock.release()
 
         except GeneratorExit:
@@ -466,6 +483,9 @@ def stream(request_data: StreamRequest):
                 ) + message
 
         finally:
+            if cache_record is not None:
+                try:cache_context.__exit__(None, None, None)
+                except OSError:pass
             cancel_event.set()
 
             finish_generation(

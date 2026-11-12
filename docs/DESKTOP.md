@@ -72,3 +72,11 @@ Before building, address these concrete requirements:
 - Build a future macOS Kokoro-only package on macOS, test its native web engine/phonemizer dependencies, then handle signing and notarization. Do not include the Windows CUDA Qwen path as Mac support.
 
 The current native-window source launch is accepted. Frozen executable and installer distribution remain a separate engineering phase.
+
+## Mouse editing and clipboard
+
+Desktop mode restores the built-in WebView2 menu only for editable text on the VOX-9K page. It contains the engine's Undo/Redo, Cut/Copy/Paste, Paste and match style, and Select All where available; native enabled/disabled state and focus/selection behavior are preserved. Debug mode and developer tools remain disabled. Ctrl+V and other native editing shortcuts remain available. There is no clipboard HTTP endpoint or JavaScript clipboard bridge.
+
+This narrow adapter is verified with pywebview 6.2.1 and WebView2 157.0.4341.46. It attaches after initialization on the native UI thread and logs initialization failure rather than enabling debugging as a fallback. Browser mode keeps its normal browser editing behavior.
+
+The owner accepted the corrected native menu and mouse/keyboard pasting. Exact results, runtime assumptions and Windows Security classification are in [PASTE_SECURITY_REPORT.md](PASTE_SECURITY_REPORT.md).

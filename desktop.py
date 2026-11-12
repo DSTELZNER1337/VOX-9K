@@ -13,6 +13,8 @@ import urllib.error
 import urllib.request
 import uuid
 
+from desktop_editing import install_editing_menu
+
 BASE_DIR = Path(__file__).resolve().parent
 APP_URL = "http://127.0.0.1:5000"
 SERVICE_NAME = "vox-9k"
@@ -136,6 +138,8 @@ def main(webview_module=None, services=None):
     except ImportError:
         print(r"Desktop mode needs the optional dependency. Run: .\.venv\Scripts\python.exe -m pip install -r requirements-desktop.txt", file=sys.stderr)
         return 1
+    if hasattr(webview, "settings"):
+        webview.settings["ALLOW_DOWNLOADS"] = True
     services = services or DesktopServices()
     startup_failed = threading.Event()
     try:
@@ -145,6 +149,7 @@ def main(webview_module=None, services=None):
             text_select=True, background_color="#121212",
         )
         window.events.closed += services.close
+        window.events.loaded += lambda: install_editing_menu(window)
 
         def start_services():
             try:

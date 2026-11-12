@@ -4,3 +4,7 @@ fastapi==0.143.0
 uvicorn==0.54.0
 httpx==0.28.1
 numpy==2.5.4
+
+# Raster decoding and native WAV decoding; already installed in acceptance environment.
+Pillow==12.3.0
+soundfile==0.14.0

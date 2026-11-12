@@ -9,6 +9,9 @@ import atexit
 import uuid
 
 from local_security import MAX_REQUEST_BYTES, permitted_request
+from audio_export import ExportJobs, MAX_TEXT, qwen_frames
+from chunk_cache import ChunkCache
+from backgrounds import BackgroundStore, user_data_dir, MAX_UPLOAD
 import json
 import os
 import subprocess
@@ -46,6 +49,8 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_REQUEST_BYTES
 
 @app.before_request
 def guard_local_requests():
+    if request.path == "/background-image" and request.method == "POST":
+        request.max_content_length = MAX_UPLOAD
     if not permitted_request(request.headers, 5000):
         return jsonify({"error": "Local application requests only."}), 403
 
@@ -453,6 +458,11 @@ def helpers():
     return send_from_directory(BASE_DIR, "vox_helpers.js")
 
 
+@app.route("/features.js")
+def feature_script():
+    return send_from_directory(BASE_DIR, "features.js")
+
+
 @app.route("/background.png")
 def background():
     return send_from_directory(
@@ -600,11 +610,10 @@ def synthesize_kokoro(
         compute_mode
     )
 
-    rendered = synthesizer.synthesize_text(
-        text,
-        language="en-us",
-        voice=voice,
-    )
+    with engine_lock:
+        rendered = synthesizer.synthesize_text(
+            text, language="en-us", voice=voice,
+        )
 
     with tempfile.TemporaryDirectory(
         dir=TEMP_DIR
@@ -720,6 +729,128 @@ def text_to_speech():
 
 
 # --------------------------------------------------
+# LOCAL EXPORT / BACKGROUND FEATURES
+# --------------------------------------------------
+
+pcm_cache = ChunkCache(TEMP_DIR / "qwen-audio-cache")
+background_store = BackgroundStore(user_data_dir())
+VALID_QWEN_VOICES = {"Vivian","Serena","Uncle_Fu","Dylan","Eric","Ryan","Aiden","Ono_Anna","Sohee"}
+
+
+def export_frames(text, engine, voice, compute, request_id, cancel):
+    import numpy as np
+    if engine == "kokoro":
+        import soundfile as sf
+        data, rate = sf.read(BytesIO(synthesize_kokoro(text,voice,compute)),dtype="float32",always_2d=True)
+        if data.shape[1] != 1:
+            raise ValueError("Expected mono Kokoro audio.")
+        yield data[:,0],rate
+    else:
+        path=pcm_cache.find(text,voice)
+        if path is not None:
+            try:
+                handle=path.open("rb")
+            except FileNotFoundError:
+                handle=None
+            if handle is not None:
+                with handle:
+                    while True:
+                        data=handle.read(65536)
+                        if not data:return
+                        if len(data)%4:raise ValueError("Invalid cached PCM.")
+                        yield np.frombuffer(data,dtype="<f4"),24000
+                return
+        yield from qwen_frames(text,voice,request_id,cancel,QWEN_FAST_URL)
+
+
+export_jobs = ExportJobs(TEMP_DIR / "exports",export_frames)
+atexit.register(export_jobs.close)
+
+
+@app.route("/exports", methods=["POST"])
+def create_export():
+    data=request.get_json(silent=True)
+    if not isinstance(data,dict):
+        return jsonify(error="A JSON object is required."),400
+    chunks=data.get("chunks")
+    engine=data.get("engine")
+    voice=data.get("voice")
+    compute=data.get("compute")
+    if (not isinstance(chunks,list) or not chunks or len(chunks)>256
+        or any(not isinstance(x,str) or not x.strip() or len(x)>3000 for x in chunks)
+        or sum(len(x) for x in chunks)>MAX_TEXT):
+        return jsonify(error="Export needs nonempty chunks, at most 20,000 characters total."),400
+    if not isinstance(engine,str) or engine not in VALID_ENGINES:
+        return jsonify(error="Unsupported engine."),400
+    voices=VALID_KOKORO_VOICES if engine=="kokoro" else VALID_QWEN_VOICES
+    if not isinstance(voice,str) or voice not in voices or not isinstance(compute,str) or compute not in VALID_COMPUTE_MODES:
+        return jsonify(error="Unsupported voice or compute mode."),400
+    if engine=="kokoro" and not kokoro_compute_available(compute):
+        return jsonify(error="Kokoro compute mode unavailable."),400
+    if engine=="qwen" and compute=="cpu":
+        return jsonify(error="Qwen export requires CUDA."),400
+    try:
+        key=export_jobs.create(chunks,engine,voice,compute)
+        return jsonify(id=key),202
+    except RuntimeError as error:
+        return jsonify(error=str(error)),409
+
+
+@app.route("/exports/<key>", methods=["GET","DELETE"])
+def export_status(key):
+    if request.method=="DELETE":
+        if not export_jobs.cancel(key):return jsonify(error="Export not found."),404
+        return jsonify(cancelled=True)
+    status=export_jobs.status(key)
+    if status is None:return jsonify(error="Export not found or expired."),404
+    return jsonify(status)
+
+
+@app.route("/exports/<key>/file")
+def export_file(key):
+    with export_jobs.lock:
+        status=export_jobs.status(key)
+        if status is None:return jsonify(error="Export not found or expired."),404
+        if status["state"]!="ready":return jsonify(error="Export is not ready."),409
+        response=send_file(export_jobs.jobs[key]["path"],mimetype="audio/wav",
+            as_attachment=True,download_name="VOX-9K-Recording.wav",conditional=False)
+        response.headers["Cache-Control"]="no-store"
+        return response
+
+
+@app.route("/background-image", methods=["GET","POST","DELETE"])
+def custom_background():
+    if request.method=="POST":
+        try:
+            background_store.save(request.get_data())
+        except ValueError as error:
+            return jsonify(error=str(error)),400
+        except OSError:
+            return jsonify(error="Could not save the background in application data."),500
+        return jsonify(custom=True)
+    if request.method=="DELETE":
+        try:background_store.restore()
+        except OSError:return jsonify(error="Could not restore the default background."),500
+        return jsonify(custom=False)
+    with background_store.lock:
+        path=background_store.path if background_store.path.is_file() else BASE_DIR/"background.png"
+        response=send_file(path,mimetype="image/png")
+        response.headers["Cache-Control"]="no-store"
+        return response
+
+
+def prune_exports():
+    while not feature_shutdown.wait(30):
+        try:export_jobs.prune()
+        except OSError:pass
+
+
+feature_shutdown=threading.Event()
+threading.Thread(target=prune_exports,name="vox-export-cleanup",daemon=True).start()
+atexit.register(feature_shutdown.set)
+
+
+# --------------------------------------------------
 # START SERVER
 # --------------------------------------------------
 
@@ -772,9 +903,15 @@ if __name__ == "__main__":
     print("http://127.0.0.1:5000")
     print()
 
-    app.run(
-        host="127.0.0.1",
-        port=5000,
-        debug=False,
-        threaded=False,
-    )
+    try:
+        app.run(
+            host="127.0.0.1",
+            port=5000,
+            debug=False,
+            threaded=False,
+        )
+    finally:
+        # Cancel before interpreter teardown. A non-daemon export worker finishes
+        # its in-flight native step before atexit closes the cached synthesizer.
+        feature_shutdown.set()
+        export_jobs.close()

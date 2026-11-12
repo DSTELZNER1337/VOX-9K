@@ -10,12 +10,12 @@ function app() {
   function element(id) {
     if (!elements.has(id)) elements.set(id, {
       value: id === 'engineSelect' ? 'kokoro' : id === 'voiceSelect' ? 'af_sarah' : id === 'computeSelect' ? 'auto' : '1',
-      textContent: '', innerHTML: '', style: {}, hidden: false, scrollTop: 0, offsetTop: 0, clientHeight: 400, disabled: false, selectedIndex: 0,
+      click(){this.clicked=true}, files:[], textContent: '', innerHTML: '', style: {}, hidden: false, scrollTop: 0, offsetTop: 0, clientHeight: 400, disabled: false, selectedIndex: 0,
       options: [{text: 'Kokoro'}], selectedOptions: [], listeners: {}, children: [],
       appendChild(x) {this.children.push(x)},
       get firstChild() {return this.children[0]},
       querySelector() {return {disabled: false}},
-      addEventListener(event, handler) {this.listeners[event] = handler},
+      addEventListener(event, handler) {const previous=this.listeners[event]; this.listeners[event]=previous? (...args)=>{const first=previous(...args);return handler(...args)||first}:handler},
     });
     return elements.get(id);
   }
@@ -24,7 +24,7 @@ function app() {
     performance, setTimeout, clearTimeout, getComputedStyle: () => ({height: "400px"}),
     URL: {createObjectURL: () => 'blob:test', revokeObjectURL() {}},
     window: {crypto: require('node:crypto').webcrypto, addEventListener() {}},
-    document: {getElementById: element, createElement: () => element(Symbol())},
+    document: {body:{style:{}}, getElementById: element, createElement: () => element(Symbol())},
     fetch: async () => ({ok: true, json: async () => ({engines: {kokoro: {modes: {auto:true,cpu:true,cuda:false}}}})}),
   });
   context.crypto = context.window.crypto;
@@ -33,6 +33,7 @@ function app() {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const script = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)].map(m => m[1]).join('\n');
   vm.runInContext(script, context);
+  vm.runInContext(fs.readFileSync(path.join(root,"features.js"),"utf8"),context);
   return {context, element, run: code => vm.runInContext(code, context)};
 }
 
@@ -209,7 +210,7 @@ test('PCM parser reports error frames', () => {
 test('header and subtle footer attribution render', () => {
   const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
   assert.match(html,/<title>VOX-9K<\/title>/);assert.match(html,/<h1>VOX-9K<\/h1>/);
-  assert.match(html,/<footer class="brand-footer">Created by: StelzTools<\/footer>/);
+  assert.match(html,/<footer class="brand-footer">Created by: Stelz Tools<\/footer>/);
   assert.doesNotMatch(html,/by DST/);
 });
 test('cleanup matches the original rules', () => {
@@ -415,4 +416,138 @@ test('uneven streamed frames and a short final packet keep order and documented 
     assert.equal(actual-expected,1024-Math.round(1024/speed));
     for(let i=1;i<rows.length;i++) assert.equal(rows[i].output[0]-rows[i-1].output.at(-1),rows[i].input[0]-rows[i-1].input.at(-1));
   }
+});
+
+test('WAV estimate reflects text, engine and listening speed without changing export size', () => {
+  const a=app();
+  assert.equal(a.run('estimateWav("", "kokoro",1).words'),0);
+  assert.equal(a.run('estimateWav("", "kokoro",1).bytes'),44);
+  const slower=a.run('estimateWav("one two three four", "qwen",1)');
+  const faster=a.run('estimateWav("one two three four", "qwen",1.5)');
+  assert.equal(slower.seconds,faster.seconds);assert.equal(slower.bytes,faster.bytes);
+  assert.equal(faster.listening,slower.seconds/1.5);
+  assert.ok(a.run('estimateWav("one two three four","kokoro",1).seconds')<slower.seconds);
+  assert.equal(a.run('estimateWav("x".repeat(600),"qwen",1).seconds'),40);
+  assert.equal(slower.bytes,44+Math.round(slower.seconds*24000)*2);
+});
+test('compact feature controls and raster picker render with exact footer branding', () => {
+  const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
+  for(const id of ['exportButton','cancelExport','exportEstimate','exportStatus','exportDownload','backgroundButton','restoreBackground','backgroundFile']) assert.match(html,new RegExp('id="'+id+'"'));
+  assert.match(html,/accept="image\/png,image\/jpeg,image\/webp"/);
+  assert.match(html,/Created by: Stelz Tools/);assert.doesNotMatch(html,/Created by: StelzTools/);
+});
+test('export refuses empty, oversized or active reading without altering playback', async () => {
+  const a=app();a.run('promptText.value=""');let calls=0;a.context.fetch=async()=>{calls++;throw new Error('must not request')};
+  await a.run('startExport()');assert.match(a.element('exportStatus').textContent,/Enter some text/);
+  a.run('promptText.value="x".repeat(20001)');await a.run('startExport()');assert.match(a.element('exportStatus').textContent,/20,000/);
+  a.run('promptText.value="Hello.";isActive=true');await a.run('startExport()');
+  assert.match(a.element('exportStatus').textContent,/Stop reading/);assert.equal(a.run('isActive'),true);assert.equal(calls,0);
+});
+test('export snapshots whole chunk sequence and voice and shows measured native metrics', async () => {
+  const a=app();const calls=[];
+  a.context.fetch=async(url,options)=>{
+    calls.push({url,options});
+    return {ok:true,json:async()=>url==='/exports'?{id:'job'}:{state:'ready',duration:65,size:480044}};
+  };
+  a.run('promptText.value="First. Second. Third.";voiceSelect.value="am_michael";speedSlider.value="1.5"');
+  await a.run('startExport()');
+  const payload=JSON.parse(calls.find(c=>c.url==='/exports').options.body);
+  assert.equal(payload.chunks.join(' '),'First. Second. Third.');
+  assert.equal(payload.voice,'am_michael');
+  assert.equal('speed' in payload,false);
+  assert.equal(a.element('exportDownload').href,'/exports/job/file');
+  assert.equal(a.element('exportDownload').hidden,false);
+  assert.match(a.element('exportStatus').textContent,/1 min 5 sec/);assert.match(a.element('exportStatus').textContent,/native 1.0×/);
+  assert.equal(a.element('readButton').disabled,false);
+  await a.run('startExport()');assert.equal(a.element('exportDownload').clicked,true);
+  assert.equal(calls.filter(c=>c.url==='/exports').length,1);
+});
+test('cancelling during export creation cancels the late job without stale UI updates', async () => {
+  const a=app();let resolve;const deleted=[];
+  a.context.fetch=(url,options)=>url==='/exports'?new Promise(r=>{resolve=r}):(deleted.push(url),Promise.resolve({ok:true,json:async()=>({})}));
+  a.run('promptText.value="Hello."');
+  const pending=a.run('startExport()');
+  assert.equal(a.element('readButton').disabled,true);
+  await a.run('cancelExport()');
+  resolve({ok:true,json:async()=>({id:'late-job'})});await pending;
+  assert.ok(deleted.includes('/exports/late-job'));
+  assert.equal(a.element('readButton').disabled,false);
+  assert.equal(a.element('exportDownload').hidden,true);
+  assert.equal(a.element('exportStatus').textContent,'Export cancelled.');
+});
+test('export generation progress and stale poll response stay scoped', async () => {
+  const a=app();let scheduled;
+  a.context.setTimeout=fn=>{scheduled=fn;return 1};
+  a.context.fetch=async()=>({ok:true,json:async()=>({state:'generating',completed:2,total:5})});
+  a.run('exportEpoch=7;exportPending=true;exportJob="job";exportDownload.hidden=true');
+  await a.run('pollExport("job",7,"key","qwen / Ryan")');
+  assert.match(a.element('exportStatus').textContent,/2 \/ 5/);assert.equal(typeof scheduled,'function');
+  a.run('exportEpoch=8;exportStatus.textContent="New state"');
+  a.context.fetch=async()=>({ok:true,json:async()=>({state:'ready',duration:12,size:44})});
+  await a.run('pollExport("job",7,"key","old")');
+  assert.equal(a.element('exportStatus').textContent,'New state');
+  assert.equal(a.element('exportDownload').hidden,true);
+});
+test('export failures restore Read and offer retry', async () => {
+  const a=app();a.context.fetch=async()=>({ok:false,json:async()=>({error:'Engine not ready'})});
+  a.run('promptText.value="Hello."');await a.run('startExport()');
+  assert.equal(a.element('readButton').disabled,false);
+  assert.equal(a.element('cancelExport').hidden,true);
+  assert.match(a.element('exportStatus').textContent,/Engine not ready/);
+});
+test('background selection sends raw local file and refreshes the existing overlay only', async () => {
+  const a=app();const calls=[];
+  a.context.fetch=async(url,options)=>{calls.push({url,options});return {ok:true,json:async()=>({custom:true})}};
+  a.context.file={size:100,type:'image/png'};
+  a.run('isActive=true');await a.run('selectBackground(file)');
+  assert.equal(calls[0].url,'/background-image');assert.equal(calls[0].options.body,a.context.file);
+  assert.match(a.context.document.body.style.backgroundImage,/linear-gradient/);
+  assert.match(a.context.document.body.style.backgroundImage,/\/background-image/);
+  assert.equal(a.run('isActive'),true);
+  a.context.file={size:8*1024*1024+1};await a.run('selectBackground(file)');
+  assert.equal(calls.length,1);assert.match(a.element('backgroundStatus').textContent,/under 8 MB/);
+});
+test('restore default keeps playback active and reports local failures', async () => {
+  const a=app();const calls=[];
+  a.context.fetch=async(url,options)=>{calls.push(options.method);return {ok:true,json:async()=>({})}};
+  a.run('isActive=true');await a.element('restoreBackground').listeners.click();
+  assert.deepEqual(calls,['DELETE']);assert.equal(a.run('isActive'),true);
+  assert.match(a.element('backgroundStatus').textContent,/Default background restored/);
+});
+
+test('a ready export permits the next Read with a different engine', async () => {
+  const a=app();a.context.fetch=async(url)=>({ok:true,json:async()=>url==='/exports'?{id:'ready'}:{state:'ready',duration:4,size:1000}});
+  a.run('promptText.value="Next reading."');await a.run('startExport()');
+  assert.equal(a.element('readButton').disabled,false);
+  a.run('engineSelect.value="qwen";voiceSelect.value="Ryan";prepareQwenAudioContext=()=>{};playQwenSession=async()=>{}');
+  a.element('readButton').listeners.click();
+  assert.equal(a.run('isActive && activeEngine==="qwen" && activeVoice==="Ryan"'),true);
+  assert.equal(a.run('exportPending'),false);
+});
+test('changed text hides a stale ready recording while speed alone keeps it reusable', async () => {
+  const a=app();a.context.fetch=async(url)=>({ok:true,json:async()=>url==='/exports'?{id:'ready'}:{state:'ready',duration:4,size:1000}});
+  a.run('promptText.value="Original."');await a.run('startExport()');
+  a.run('speedSlider.value="1.8";updateExportEstimate()');
+  assert.equal(a.element('exportDownload').hidden,false);
+  a.run('promptText.value="Different.";updateExportEstimate()');
+  assert.equal(a.element('exportDownload').hidden,true);
+  assert.match(a.element('exportStatus').textContent,/changed/);
+});
+
+test('unreadable picker file reports failure without applying it or stopping playback', async () => {
+  const a=app();a.context.fetch=async()=>{throw new Error('The selected file could not be read')};
+  a.context.file={size:100};a.run('isActive=true');
+  await a.run('selectBackground(file)');
+  assert.match(a.element('backgroundStatus').textContent,/could not be read/);
+  assert.equal(a.context.document.body.style.backgroundImage,undefined);
+  assert.equal(a.run('isActive'),true);assert.equal(a.element('backgroundFile').value,'');
+});
+test('background storage permission failure is displayed and selection can be retried', async () => {
+  const a=app();a.context.fetch=async()=>({ok:false,json:async()=>({error:'Could not save the background in application data.'})});
+  a.context.file={size:100};await a.run('selectBackground(file)');
+  assert.match(a.element('backgroundStatus').textContent,/application data/);
+  assert.equal(a.element('backgroundFile').value,'');
+  a.context.fetch=async()=>({ok:true,json:async()=>({custom:true})});
+  await a.run('selectBackground(file)');
+  assert.match(a.element('backgroundStatus').textContent,/Custom background saved/);
 });

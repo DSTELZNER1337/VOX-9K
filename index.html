@@ -16,7 +16,7 @@
                     rgba(0, 0, 0, 0.65),
                     rgba(0, 0, 0, 0.65)
                 ),
-                url("/background.png");
+                url("/background-image");
 
             background-size: cover;
             background-position: center;
@@ -149,12 +149,30 @@
             pointer-events: none;
             user-select: none;
         }
+        #backgroundStatus:empty { display: none; }
+        .header-tools { position: absolute; top: 0; right: 0; display: flex; gap: 4px; align-items: center; }
+        .header-tools button { padding: 5px 8px; margin: 0; font-size: 11px; color: #b8b8b8; }
+        #backgroundButton { width: 32px; height: 29px; }
+        #backgroundButton svg { display: block; width: 16px; height: 16px; }
+        h1 { padding-right: 180px; }
+        .export-info { margin-top: 8px; font-size: 12px; color: #aaaaaa; max-width: 920px; line-height: 1.5; }
+        .export-info a { color: #d2d6df; margin-right: 8px; }
+        button:disabled { opacity: .5; cursor: default; }
+        button:focus-visible, a:focus-visible { outline: 2px solid #b9b6e8; outline-offset: 3px; }
     </style>
 </head>
 
 <body>
 
     <h1>VOX-9K</h1>
+    <div class="header-tools">
+        <button id="backgroundButton" title="Change Background" aria-label="Change Background">
+            <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 6-6 4 4 3-3 5 5"/></svg>
+        </button>
+        <button id="restoreBackground" title="Restore Default Background">Restore default</button>
+        <input type="file" id="backgroundFile" accept="image/png,image/jpeg,image/webp" hidden>
+    </div>
+    <div id="backgroundStatus" class="export-info" role="status"></div>
 
     <textarea
         id="promptText"
@@ -169,6 +187,13 @@
         <button id="readButton">Read</button>
         <button id="pauseButton">Pause</button>
         <button id="stopButton">Stop</button>
+        <button id="exportButton">Download WAV</button>
+        <button id="cancelExport" hidden>Cancel export</button>
+        <div class="export-info">
+            <div id="exportEstimate"></div>
+            <div id="exportStatus" role="status" aria-live="polite"></div>
+            <a id="exportDownload" href="#" download="VOX-9K-Recording.wav" hidden>Save WAV</a>
+        </div>
 
         <div class="control-row">
             <label for="engineSelect">
@@ -311,7 +336,7 @@
         Ready
     </div>
 
-    <footer class="brand-footer">Created by: StelzTools</footer>
+    <footer class="brand-footer">Created by: Stelz Tools</footer>
 
     <script src="/vox_helpers.js"></script>
     <script>
@@ -2902,6 +2927,7 @@
 
     </script>
 
+    <script src="/features.js"></script>
 </body>
 
 </html>
