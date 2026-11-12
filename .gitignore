@@ -35,3 +35,34 @@ Desktop.ini
 
 # Logs
 *.log
+# Local optimized environment, manual backups and audit evidence
+.venv-fast/
+backups/
+audit/
+outputs/
+
+# Optional isolated model-free tests
+.venv-test/
+
+# Other local environments, downloaded weights and diagnostic media
+.venv*/
+*.safetensors
+*.onnx
+*.pt
+*.pth
+*.ckpt
+*.gguf
+*.f32
+*.pcm
+*.flac
+*.ogg
+*.m4a
+*.aac
+
+# Local credentials and temporary editor/export files
+*.pem
+*.p12
+*.pfx
+*.tmp
+*.bak
+*.orig

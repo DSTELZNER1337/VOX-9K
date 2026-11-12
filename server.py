@@ -6,14 +6,17 @@ from io import BytesIO
 from pathlib import Path
 
 import atexit
+import uuid
+
+from local_security import MAX_REQUEST_BYTES, permitted_request
+import json
 import os
+import subprocess
 import tempfile
 import threading
-
-try:
-    import onnxruntime as ort
-except ImportError:
-    ort = None
+import time
+import urllib.error
+import urllib.request
 
 
 # --------------------------------------------------
@@ -21,40 +24,45 @@ except ImportError:
 # --------------------------------------------------
 
 BASE_DIR = Path(__file__).resolve().parent
-CACHE_DIR = BASE_DIR / "cache" / "pykokoro"
+
+CACHE_DIR = BASE_DIR / "cache"
+KOKORO_CACHE_DIR = CACHE_DIR / "pykokoro"
+QWEN_CACHE_DIR = CACHE_DIR / "huggingface"
 TEMP_DIR = BASE_DIR / "temp"
 
-CACHE_DIR.mkdir(
-    parents=True,
-    exist_ok=True
-)
-
-TEMP_DIR.mkdir(
-    parents=True,
-    exist_ok=True
-)
+for directory in (
+    KOKORO_CACHE_DIR,
+    QWEN_CACHE_DIR,
+    TEMP_DIR,
+):
+    directory.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = MAX_REQUEST_BYTES
+
+
+@app.before_request
+def guard_local_requests():
+    if not permitted_request(request.headers, 5000):
+        return jsonify({"error": "Local application requests only."}), 403
+
+
+@app.errorhandler(413)
+def oversized_request(error):
+    return jsonify({"error": "Request body is too large."}), 413
 
 
 # --------------------------------------------------
-# COMPUTE / ENGINE SETUP
+# OPTIONAL RUNTIME DISCOVERY
 # --------------------------------------------------
 
-VALID_COMPUTE_MODES = {
-    "auto",
-    "cpu",
-    "cuda",
-}
-
-# Each mode gets its own synthesizer.
-# Engines are created only when first requested,
-# then reused for the rest of the server session.
-synthesizers = {}
-
-# Environment variables are process-global, so protect
-# engine creation even if Flask is made threaded later.
-engine_lock = threading.RLock()
+try:
+    import onnxruntime as ort
+except ImportError:
+    ort = None
 
 
 def package_version(package_name):
@@ -62,6 +70,43 @@ def package_version(package_name):
         return version(package_name)
     except PackageNotFoundError:
         return "unknown"
+
+
+# --------------------------------------------------
+# ENGINE CONSTANTS
+# --------------------------------------------------
+
+VALID_ENGINES = {
+    "kokoro",
+    "qwen",
+}
+
+VALID_COMPUTE_MODES = {
+    "auto",
+    "cpu",
+    "cuda",
+}
+
+VALID_KOKORO_VOICES = {
+    "af_sarah", "af_heart", "af_bella", "af_nicole", "af_nova", "af_sky",
+    "am_michael", "am_fenrir", "am_puck", "am_onyx", "am_liam",
+    "bf_emma", "bf_isabella", "bf_lily", "bm_george", "bm_fable",
+    "bm_lewis", "bm_daniel",
+}
+
+QWEN_MODEL_ID = "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"
+QWEN_FAST_URL = "http://127.0.0.1:5001"
+QWEN_FAST_PYTHON = BASE_DIR / ".venv-fast" / "Scripts" / "python.exe"
+QWEN_FAST_SERVER = BASE_DIR / "qwen_fast_server.py"
+
+
+# --------------------------------------------------
+# KOKORO COMPUTE / ENGINE SETUP
+# --------------------------------------------------
+
+kokoro_synthesizers = {}
+kokoro_cuda_failed = False
+engine_lock = threading.RLock()
 
 
 def available_onnx_providers():
@@ -74,155 +119,301 @@ def available_onnx_providers():
         return []
 
 
-def compute_mode_available(mode):
+def kokoro_compute_available(mode):
     providers = available_onnx_providers()
 
     if mode == "auto":
-        return bool(providers)
+        return kokoro_auto_preference() != "unknown"
 
     if mode == "cpu":
         return "CPUExecutionProvider" in providers
 
     if mode == "cuda":
-        return "CUDAExecutionProvider" in providers
+        return "CUDAExecutionProvider" in providers and not kokoro_cuda_failed
 
     return False
 
 
-def build_kokoro_config():
+def kokoro_auto_preference():
+    providers = available_onnx_providers()
+
+    if "CUDAExecutionProvider" in providers and not kokoro_cuda_failed:
+        return "cuda"
+
+    if "CPUExecutionProvider" in providers:
+        return "cpu"
+
+    return "unknown"
+
+
+def installed_kokoro_assets():
+    """Resolve the existing default model locally before any catalog acquisition."""
+    try:
+        from onnxvoice import OnnxVoice
+        from onnxvoice.errors import NotInstalledError
+    except ImportError:
+        return {}
+    try:
+        installation = OnnxVoice(cache_dir=KOKORO_CACHE_DIR, offline=True).resolve(
+            "kokoro:v1.0", quality="fp32",
+            distribution="github-model-files-v1.0-timestamped-r4",
+        )
+    except NotInstalledError:
+        # Preserve first-run PyKokoro acquisition when no installation exists.
+        return {}
+    return {
+        "model_path": installation.artifact_path("model"),
+        "voices_path": installation.artifact_path("voices"),
+        "model_config_path": installation.artifact_path("vocab"),
+    }
+
+
+def build_kokoro_config(compute_mode="auto"):
     return SynthesisConfig(
+        **installed_kokoro_assets(),
+        provider=kokoro_auto_preference() if compute_mode == "auto" else compute_mode,
         voice="af_sarah",
-
-        cache_dir=CACHE_DIR,
-
+        cache_dir=KOKORO_CACHE_DIR,
         long_text_split="sentence",
-
         long_text_use_spacy=False,
-
         generation=GenerationConfig(
-            lang="en-us"
+            lang="en-us",
         ),
     )
 
 
-def create_synthesizer(compute_mode):
+def kokoro_active_providers(synthesizer):
+    """Read OnnxVoice session diagnostics through the installed PyKokoro adapter.
+
+    The adapter nesting is version-specific; missing diagnostics means unknown,
+    never evidence of successful CUDA execution.
     """
-    Create and warm one Kokoro synthesizer for a compute mode.
+    renderer = getattr(synthesizer, "_renderer", None)
+    backend = getattr(renderer, "_backend", None)
+    runtime = getattr(backend, "_runtime", None)
+    adapter = getattr(runtime, "_runtime", None)
+    owned_sessions = getattr(adapter, "_owned_sessions", None)
+    if not callable(owned_sessions):
+        return None
+    sessions = owned_sessions()
+    if not isinstance(sessions, (list, tuple)) or not sessions:
+        return None
+    # OnnxVoice 0.2.5 diagnostics label the requested selection "active".
+    # Ask each actual ORT session instead: failed CUDA can silently fall back.
+    return sorted({provider for session in sessions for provider in session.session.get_providers()})
 
-    PyKokoro 0.10.x uses OnnxVoice underneath. OnnxVoice supports
-    provider selection through ONNXVOICE_PROVIDER.
 
-    The warmup call forces the ONNX session to be created while the
-    requested provider policy is active. After warmup, that synthesizer
-    is cached and reused.
-    """
 
+def create_kokoro_synthesizer(compute_mode):
+    global kokoro_cuda_failed
     if compute_mode not in VALID_COMPUTE_MODES:
         raise ValueError(
             f"Unsupported compute mode: {compute_mode}"
         )
 
-    if not compute_mode_available(compute_mode):
-        providers = available_onnx_providers()
-
+    if not kokoro_compute_available(compute_mode):
         raise RuntimeError(
-            f"Compute mode '{compute_mode}' is unavailable. "
-            f"Available ONNX Runtime providers: {providers}"
+            f"Kokoro compute mode '{compute_mode}' is unavailable. "
+            f"Available ONNX Runtime providers: {available_onnx_providers()}"
         )
 
     print(
-        f"Loading VOX-9K engine: {compute_mode.upper()}..."
+        f"Loading Kokoro engine: {compute_mode.upper()}..."
     )
 
-    old_provider = os.environ.get(
-        "ONNXVOICE_PROVIDER"
-    )
-
-    old_providers = os.environ.get(
-        "ONNXVOICE_PROVIDERS"
-    )
-
+    requested_provider = kokoro_auto_preference() if compute_mode == "auto" else compute_mode
+    synthesizer = KokoroSynthesizer(build_kokoro_config(compute_mode))
     try:
-        # Use the singular provider setting so each cached
-        # synthesizer is pinned to the requested mode.
-        os.environ[
-            "ONNXVOICE_PROVIDER"
-        ] = compute_mode
-
-        # Avoid a plural provider policy overriding it.
-        os.environ.pop(
-            "ONNXVOICE_PROVIDERS",
-            None
-        )
-
-        synthesizer = KokoroSynthesizer(
-            build_kokoro_config()
-        )
-
-        # Force model/session creation now while the provider
-        # environment is set.
         synthesizer.synthesize_text(
-            "Voice system ready.",
-            language="en-us",
-            voice="af_sarah",
+            "Voice system ready.", language="en-us", voice="af_sarah",
         )
-
-    finally:
-        if old_provider is None:
-            os.environ.pop(
-                "ONNXVOICE_PROVIDER",
-                None
-            )
-        else:
-            os.environ[
-                "ONNXVOICE_PROVIDER"
-            ] = old_provider
-
-        if old_providers is None:
-            os.environ.pop(
-                "ONNXVOICE_PROVIDERS",
-                None
-            )
-        else:
-            os.environ[
-                "ONNXVOICE_PROVIDERS"
-            ] = old_providers
+        active = kokoro_active_providers(synthesizer)
+        if requested_provider == "cuda" and active is not None and "CUDAExecutionProvider" not in active:
+            kokoro_cuda_failed = True
+            if compute_mode == "cuda":
+                raise RuntimeError("Kokoro CUDA initialization failed; the runtime fell back to CPU. Select CPU or correct the ONNX Runtime CUDA DLL dependencies.")
+            print("Kokoro CUDA initialization failed; Auto is using CPU.")
+    except Exception:
+        close_method = getattr(synthesizer, "close", None)
+        if callable(close_method):
+            close_method()
+        raise
 
     print(
-        f"VOX-9K {compute_mode.upper()} engine ready."
+        f"Kokoro {compute_mode.upper()} engine ready."
     )
 
     return synthesizer
 
 
-def get_synthesizer(compute_mode):
+def get_kokoro_synthesizer(compute_mode):
     with engine_lock:
-
-        existing = synthesizers.get(
+        existing = kokoro_synthesizers.get(
             compute_mode
         )
 
         if existing is not None:
             return existing
 
-        synthesizer = create_synthesizer(
+        synthesizer = create_kokoro_synthesizer(
             compute_mode
         )
 
-        synthesizers[
+        kokoro_synthesizers[
             compute_mode
         ] = synthesizer
 
         return synthesizer
 
 
-def close_synthesizers():
-    for synthesizer in synthesizers.values():
+# --------------------------------------------------
+# QWEN FAST SIDECAR
+# --------------------------------------------------
 
+qwen_sidecar_process = None
+qwen_sidecar_owned = False
+
+
+def qwen_fast_installation_available():
+    return (
+        QWEN_FAST_PYTHON.is_file()
+        and
+        QWEN_FAST_SERVER.is_file()
+    )
+
+
+def qwen_sidecar_health(timeout=0.35):
+    try:
+        with urllib.request.urlopen(
+            QWEN_FAST_URL + "/health",
+            timeout=timeout,
+        ) as response:
+            health = json.loads(response.read(65536).decode("utf-8"))
+            if (isinstance(health, dict)
+                    and health.get("service") == "vox-9k-qwen"
+                    and health.get("model") == QWEN_MODEL_ID
+                    and health.get("status") in {"starting", "loading", "warming", "ready", "error"}):
+                return health
+            return None
+
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+        json.JSONDecodeError,
+        UnicodeError,
+        OSError,
+    ):
+        return None
+
+
+def start_qwen_sidecar():
+    global qwen_sidecar_process
+    global qwen_sidecar_owned
+
+    if qwen_sidecar_health() is not None:
+        print(
+            "Qwen fast sidecar already running on port 5001."
+        )
+        return True
+
+    if not qwen_fast_installation_available():
+        print(
+            "Qwen fast sidecar unavailable. "
+            "Expected .venv-fast and qwen_fast_server.py."
+        )
+        return False
+
+    env = os.environ.copy()
+    env["HF_HOME"] = str(QWEN_CACHE_DIR)
+    env["HF_HUB_CACHE"] = str(QWEN_CACHE_DIR / "hub")
+    env["PYTHONUNBUFFERED"] = "1"
+    env["VOX_PARENT_PIPE"] = "1"
+
+    print(
+        "Starting Qwen fast sidecar in .venv-fast..."
+    )
+
+    qwen_sidecar_process = subprocess.Popen(
+        [
+            str(QWEN_FAST_PYTHON),
+            str(QWEN_FAST_SERVER),
+        ],
+        cwd=str(BASE_DIR),
+        env=env,
+        stdin=subprocess.PIPE,
+    )
+
+    qwen_sidecar_owned = True
+
+    # Wait only for the local HTTP service to appear.
+    # Model loading and CUDA graph capture continue in the background.
+    deadline = time.time() + 5.0
+
+    while time.time() < deadline:
+        if qwen_sidecar_process.poll() is not None:
+            print(
+                "Qwen fast sidecar exited during startup."
+            )
+            return False
+
+        health = qwen_sidecar_health(
+            timeout=0.2
+        )
+
+        if health is not None:
+            print(
+                "Qwen fast sidecar connected. "
+                f"Status: {health.get('status', 'unknown')}"
+            )
+            return True
+
+        time.sleep(0.1)
+
+    print(
+        "Qwen fast sidecar is still starting in the background."
+    )
+    return True
+
+
+def stop_qwen_sidecar():
+    global qwen_sidecar_process
+
+    if (
+        not qwen_sidecar_owned
+        or
+        qwen_sidecar_process is None
+    ):
+        return
+
+    try:
+        # Closing the ownership pipe also reaches the actual Python child
+        # behind the Windows venv launcher. Parent death closes it as well.
+        if qwen_sidecar_process.stdin is not None:
+            qwen_sidecar_process.stdin.close()
+        qwen_sidecar_process.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        qwen_sidecar_process.terminate()
+        try:
+            qwen_sidecar_process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            qwen_sidecar_process.kill()
+            qwen_sidecar_process.wait(timeout=3)
+    except OSError as error:
+        print("Qwen sidecar shutdown error:", error)
+
+
+
+# --------------------------------------------------
+# ENGINE CLEANUP
+# --------------------------------------------------
+
+
+def close_engines():
+    for synthesizer in kokoro_synthesizers.values():
         close_method = getattr(
             synthesizer,
             "close",
-            None
+            None,
         )
 
         if callable(close_method):
@@ -231,57 +422,71 @@ def close_synthesizers():
             except Exception:
                 pass
 
+    stop_qwen_sidecar()
 
-atexit.register(
-    close_synthesizers
-)
+
+atexit.register(close_engines)
 
 
 # --------------------------------------------------
 # SERVE VOX-9K
 # --------------------------------------------------
 
+MAIN_INSTANCE_ID = os.environ.get("VOX_INSTANCE_ID") or uuid.uuid4().hex
+
+
+@app.route("/health")
+def application_health():
+    return jsonify({"service": "vox-9k", "api_version": 1, "instance_id": MAIN_INSTANCE_ID})
+
+
 @app.route("/")
 def index():
     return send_from_directory(
         BASE_DIR,
-        "index.html"
+        "index.html",
     )
+
+
+@app.route("/vox_helpers.js")
+def helpers():
+    return send_from_directory(BASE_DIR, "vox_helpers.js")
 
 
 @app.route("/background.png")
 def background():
     return send_from_directory(
         BASE_DIR,
-        "background.png"
+        "background.png",
     )
 
 
 # --------------------------------------------------
-# SYSTEM / COMPUTE INFO
+# SYSTEM / ENGINE INFO
 # --------------------------------------------------
 
 @app.route("/system-info")
 def system_info():
-
-    providers = available_onnx_providers()
-
-    cuda_available = (
-        "CUDAExecutionProvider"
-        in providers
+    kokoro_cuda = kokoro_compute_available(
+        "cuda"
     )
 
-    cpu_available = (
-        "CPUExecutionProvider"
-        in providers
+    kokoro_cpu = kokoro_compute_available(
+        "cpu"
     )
 
-    if cuda_available:
-        auto_choice = "cuda"
-    elif cpu_available:
-        auto_choice = "cpu"
-    else:
-        auto_choice = "unknown"
+    qwen_installed = qwen_fast_installation_available()
+    qwen_health = qwen_sidecar_health()
+
+    qwen_status = (
+        qwen_health.get("status")
+        if qwen_health
+        else (
+            "starting"
+            if qwen_installed
+            else "not-installed"
+        )
+    )
 
     return jsonify({
         "pykokoro_version":
@@ -289,31 +494,131 @@ def system_info():
 
         "onnxruntime_version":
             package_version("onnxruntime-gpu")
-            if cuda_available
+            if kokoro_cuda
             else package_version("onnxruntime"),
 
         "available_providers":
-            providers,
+            available_onnx_providers(),
 
         "modes": {
             "auto":
-                bool(providers),
+                kokoro_auto_preference()
+                != "unknown",
 
             "cpu":
-                cpu_available,
+                kokoro_cpu,
 
             "cuda":
-                cuda_available,
+                kokoro_cuda,
         },
 
         "auto_preference":
-            auto_choice,
+            kokoro_auto_preference(),
 
-        "loaded_engines":
-            sorted(
-                synthesizers.keys()
-            ),
+        "engines": {
+            "kokoro": {
+                "installed": True,
+
+                "auto_preference":
+                    kokoro_auto_preference(),
+
+                "modes": {
+                    "auto":
+                        kokoro_auto_preference()
+                        != "unknown",
+
+                    "cpu":
+                        kokoro_cpu,
+
+                    "cuda":
+                        kokoro_cuda,
+                },
+
+                "loaded":
+                    sorted(
+                        kokoro_synthesizers.keys()
+                    ),
+            },
+
+            "qwen": {
+                "installed":
+                    qwen_installed,
+
+                "model":
+                    QWEN_MODEL_ID,
+
+                "backend":
+                    "faster-qwen3-tts",
+
+                "status":
+                    qwen_status,
+
+                "gpu":
+                    qwen_health.get("gpu")
+                    if qwen_health
+                    else None,
+
+                "torch_version":
+                    qwen_health.get("torch_version")
+                    if qwen_health
+                    else None,
+
+                "auto_preference":
+                    "cuda"
+                    if qwen_installed
+                    else "unknown",
+
+                "modes": {
+                    "auto":
+                        qwen_installed,
+
+                    "cpu":
+                        False,
+
+                    "cuda":
+                        qwen_installed,
+                },
+
+                "stream_url":
+                    QWEN_FAST_URL + "/stream",
+            },
+        },
     })
+
+
+# --------------------------------------------------
+# KOKORO SYNTHESIS
+# --------------------------------------------------
+
+
+def synthesize_kokoro(
+    text,
+    voice,
+    compute_mode,
+):
+    synthesizer = get_kokoro_synthesizer(
+        compute_mode
+    )
+
+    rendered = synthesizer.synthesize_text(
+        text,
+        language="en-us",
+        voice=voice,
+    )
+
+    with tempfile.TemporaryDirectory(
+        dir=TEMP_DIR
+    ) as temp_dir:
+        wav_path = (
+            Path(temp_dir)
+            / "vox_output.wav"
+        )
+
+        rendered.save_wav(
+            str(wav_path)
+        )
+
+        return wav_path.read_bytes()
 
 
 # --------------------------------------------------
@@ -322,126 +627,95 @@ def system_info():
 
 @app.route("/tts", methods=["POST"])
 def text_to_speech():
-
-    data = (
-        request.get_json(
-            silent=True
-        )
-        or {}
-    )
-
-    text = str(
-        data.get(
-            "text",
-            ""
-        )
-    ).strip()
-
-    voice = str(
-        data.get(
-            "voice",
-            "af_sarah"
-        )
-    ).strip()
-
-    compute_mode = str(
-        data.get(
-            "compute",
-            "auto"
-        )
-    ).strip().lower()
-
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "A JSON object is required."}), 400
+    defaults = {"text": "", "engine": "kokoro", "voice": "af_sarah", "compute": "auto"}
+    if any(not isinstance(data.get(key, value), str) for key, value in defaults.items()):
+        return jsonify({"error": "Text, engine, voice and compute must be strings."}), 400
+    text = data.get("text", "").strip()
+    engine = data.get("engine", "kokoro").strip().lower()
+    voice = data.get("voice", "af_sarah").strip()
+    compute_mode = data.get("compute", "auto").strip().lower()
+    if engine == "kokoro" and voice not in VALID_KOKORO_VOICES:
+        return jsonify({"error": "Unsupported Kokoro voice."}), 400
 
     if not text:
         return jsonify({
-            "error":
-                "No text provided."
+            "error": "No text provided."
         }), 400
 
+    if engine not in VALID_ENGINES:
+        return jsonify({
+            "error":
+                "Engine must be one of: kokoro, qwen."
+        }), 400
 
     if compute_mode not in VALID_COMPUTE_MODES:
         return jsonify({
             "error":
-                "Compute must be one of: "
-                "auto, cpu, cuda."
+                "Compute must be one of: auto, cpu, cuda."
         }), 400
 
+    if len(text) > 3000:
+        return jsonify({
+            "error": "Text chunk is too long."
+        }), 400
 
-    if not compute_mode_available(
+    if engine == "qwen":
+        return jsonify({
+            "error":
+                "Qwen now uses the streaming fast sidecar endpoint."
+        }), 400
+
+    if not kokoro_compute_available(
         compute_mode
     ):
         return jsonify({
             "error":
-                f"Compute mode "
-                f"'{compute_mode}' "
-                f"is unavailable.",
+                f"Kokoro compute mode '{compute_mode}' is unavailable.",
 
             "available_providers":
                 available_onnx_providers(),
         }), 400
 
-
-    if len(text) > 3000:
-        return jsonify({
-            "error":
-                "Text chunk is too long."
-        }), 400
-
-
     try:
-
-        synthesizer = get_synthesizer(
-            compute_mode
-        )
-
-        rendered = synthesizer.synthesize_text(
+        audio_data = synthesize_kokoro(
             text,
-            language="en-us",
-            voice=voice,
+            voice,
+            compute_mode,
         )
 
-
-        # Keep temporary WAV files inside the project
-        # instead of Windows' default C: temp directory.
-        with tempfile.TemporaryDirectory(
-            dir=TEMP_DIR
-        ) as temp_dir:
-
-            wav_path = (
-                Path(temp_dir)
-                / "vox_output.wav"
-            )
-
-            rendered.save_wav(
-                str(wav_path)
-            )
-
-            audio_bytes = BytesIO(
-                wav_path.read_bytes()
-            )
-
+        audio_bytes = BytesIO(
+            audio_data
+        )
 
         audio_bytes.seek(0)
 
-
-        return send_file(
+        response = send_file(
             audio_bytes,
             mimetype="audio/wav",
-            download_name=
-                "vox_output.wav"
+            download_name="vox_output.wav",
         )
 
+        response.headers[
+            "X-VOX-Engine"
+        ] = "kokoro"
+
+        response.headers[
+            "X-VOX-Compute"
+        ] = compute_mode
+
+        return response
 
     except Exception as error:
-
         print(
-            "Kokoro error:",
-            error
+            "KOKORO TTS error:",
+            error,
         )
 
         return jsonify({
-            "error":
-                str(error)
+            "error": "Kokoro synthesis failed. Check the local server console."
         }), 500
 
 
@@ -449,49 +723,58 @@ def text_to_speech():
 # START SERVER
 # --------------------------------------------------
 
-if __name__ == "__main__":
+def watch_desktop_parent():
+    from process_lifecycle import wait_for_parent_eof
+    wait_for_parent_eof()
+    try:
+        stop_qwen_sidecar()
+    finally:
+        os._exit(0)
 
+
+if __name__ == "__main__":
+    if os.environ.get("VOX_DESKTOP_PARENT_PIPE") == "1":
+        threading.Thread(target=watch_desktop_parent, name="vox-desktop-owner", daemon=True).start()
     print()
     print("==============================")
     print("       VOX-9K SERVER")
     print("==============================")
     print()
 
-    providers = available_onnx_providers()
+    print(
+        "Kokoro ONNX providers:",
+        available_onnx_providers(),
+    )
 
     print(
-        "ONNX providers:",
-        providers
+        "Qwen fast environment:",
+        qwen_fast_installation_available(),
     )
 
     print()
 
-    # Warm Auto only.
-    # CPU and CUDA engines are loaded lazily if the
-    # user explicitly selects them.
-    if compute_mode_available("auto"):
-
+    if os.environ.get("VOX_SKIP_WARMUP") != "1" and kokoro_compute_available("auto"):
         try:
-            get_synthesizer(
+            get_kokoro_synthesizer(
                 "auto"
             )
-
         except Exception as error:
             print(
-                "Auto warmup error:",
-                error
+                "Kokoro Auto warmup error:",
+                error,
             )
+
+    if os.environ.get("VOX_DISABLE_QWEN") != "1":
+        start_qwen_sidecar()
 
     print()
     print("Open:")
-    print(
-        "http://127.0.0.1:5000"
-    )
+    print("http://127.0.0.1:5000")
     print()
 
     app.run(
         host="127.0.0.1",
         port=5000,
         debug=False,
-        threaded=False
+        threaded=False,
     )
